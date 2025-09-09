@@ -1,0 +1,32 @@
+{
+  "name": "two-factor-auth",
+  "version": "1.0.0",
+  "description": "LinkedIn automation with Playwright + Stealth + MFA",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx playwright test --headed",
+    "start": "node src/linkedin-login.spec.js"
+  },
+  "keywords": [
+    "playwright",
+    "stealth",
+    "linkedin",
+    "automation",
+    "mfa"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "google-spreadsheet": "^5.0.2",
+    "googleapis": "^159.0.0",
+    "playwright": "^1.55.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "speakeasy": "^2.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}
