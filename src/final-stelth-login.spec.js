@@ -288,23 +288,22 @@ test("LinkedIn stealth login with chained human-like actions", async () => {
     await page.locator('button[type="submit"]').click();
 
     await page.waitForTimeout(2000);
-    const authLink = page.locator(
-      'a:has-text("Verify using authenticator app")'
-    );
+    // MFA TOTP flow
+    const authLink = page.locator('a:has-text("Verify using authenticator app")');
     if (await authLink.isVisible().catch(() => false)) {
-      log("🔐 Switching to authenticator...");
       await authLink.click();
       await page.waitForTimeout(1000);
     }
 
-    const pinInput = page.locator(`input[name="pin"][maxlength="6"]`).first();
-    if (await pinInput.isVisible().catch(() => false)) {
+    const pinInputSelector = 'input[name="pin"][maxlength="6"]';
+    const pinInputVisible = await page.locator(pinInputSelector).first().isVisible().catch(() => false);
+
+    if (pinInputVisible) {
       const token = speakeasy.totp({
         secret: LINKEDIN_TOTP_SECRET,
         encoding: "base32",
       });
-      log(`📲 Entering MFA code: ${token}`);
-      await humanType(page, `input[name="pin"][maxlength="6"]`, token);
+      await humanType(page, pinInputSelector, token);
       await page.locator("#two-step-submit-button").first().click();
     }
 

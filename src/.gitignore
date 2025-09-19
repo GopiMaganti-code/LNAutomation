@@ -25,3 +25,8 @@ Thumbs.db
 
 # State files
 *-state.json
+
+echo "credentials/your-service-account.json" >> .gitignore
+git add .gitignore
+git commit -m "Ignore service account credentials"
+

@@ -148,176 +148,270 @@ async function saveToGoogleSheets(connections) {
 }
 
 // ---------- UI Scraper ----------
-// async function scrapeConnectionsUI(page, alreadyFetchedUrls = new Set()) {
-//   console.log("📂 Navigating to Connections page...");
-//   await page.goto(
-//     "https://www.linkedin.com/mynetwork/invite-connect/connections/",
-//     {
-//       waitUntil: "domcontentloaded",
-//       timeout: 60000,
-//     }
-//   );
-//   await randomDelay(5000, 8000);
-
-//   let previousCount = alreadyFetchedUrls.size;
-//   const connectionsSet = new Set(alreadyFetchedUrls);
-//   let scrollAttempts = 0;
-
-//   const container = page.locator("main#workspace").last();
-
-//   while (true) {
-//     await container.evaluate((el) => el.scrollBy(0, 400));
-//     await randomDelay(800, 1500);
-//     await page
-//       .waitForSelector("a[data-view-name='connections-profile']", {
-//         timeout: 5000,
-//       })
-//       .catch(() => {});
-
-//     const loadedConnections = await page.$$eval(
-//       "a[data-view-name='connections-profile']",
-//       (els) => els.map((el) => el.href)
-//     );
-//     loadedConnections.forEach((url) => connectionsSet.add(url));
-
-//     if (connectionsSet.size === previousCount) {
-//       scrollAttempts++;
-//     } else {
-//       scrollAttempts = 0;
-//       previousCount = connectionsSet.size;
-//     }
-
-//     if (scrollAttempts >= 10) break;
-//     if (previousCount % 50 === 0) await randomDelay(3000, 6000);
-//   }
-
-//   const connections = await page.$$eval(
-//     "div[componentkey^='auto-component-']",
-//     (cards) =>
-//       cards
-//         .map((card) => {
-//           const firstAnchor = card.querySelector(
-//             'a[data-view-name="connections-profile"]'
-//           );
-//           const profileImageEl = firstAnchor?.querySelector("figure img");
-
-//           const infoAnchor =
-//             card.querySelectorAll(
-//               'a[data-view-name="connections-profile"]'
-//             )[1] || firstAnchor;
-//           const anchorPs = infoAnchor
-//             ? Array.from(infoAnchor.querySelectorAll("p"))
-//             : [];
-//           const nameEl =
-//             anchorPs[0]?.querySelector("a") || card.querySelector("p a");
-
-//           const headlineText = anchorPs[1]?.innerText?.trim() || null;
-
-//           const connectedDateEl = Array.from(card.querySelectorAll("p")).find(
-//             (p) => /Connected on/i.test(p.innerText || "")
-//           );
-
-//           const profileUrl =
-//             (firstAnchor?.href || infoAnchor?.href || "").split("?")[0] || null;
-
-//           return {
-//             name: nameEl?.innerText?.trim() || null,
-//             profileUrl,
-//             headline: headlineText,
-//             connectedOn: connectedDateEl
-//               ? connectedDateEl.innerText
-//                   .replace(/^\s*Connected on\s*/i, "")
-//                   .trim()
-//               : null,
-//             profileImageUrl: profileImageEl?.src || null,
-//           };
-//         })
-//         .filter((c) => c.name && c.profileUrl)
-//   );
-
-//   console.log(`✅ Total connections extracted via UI: ${connections.length}`);
-//   return connections;
-// }
-
 async function scrapeConnectionsUI(page, alreadyFetchedUrls = new Set()) {
   console.log("📂 Navigating to Connections page...");
-
-  try {
-    // Try direct navigation first
-    await page.goto("https://www.linkedin.com/mynetwork/invite-connect/connections/", {
-      waitUntil: "networkidle",
-      timeout: 120000, // 2 minutes
-    });
-  } catch (err) {
-    console.log("⚠️ Direct navigation failed, trying fallback via UI...");
-    try {
-      // Go to feed first
-      await page.goto("https://www.linkedin.com/feed/", {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
-      });
-
-      // Click "My Network"
-      await page.waitForSelector("a[data-test-global-nav-link='mynetwork']", { timeout: 15000 });
-      await page.click("a[data-test-global-nav-link='mynetwork']");
-
-      // Then "Connections"
-      await page.waitForSelector("a[href*='/mynetwork/invite-connect/connections/']", { timeout: 15000 });
-      await page.click("a[href*='/mynetwork/invite-connect/connections/']");
-
-      await page.waitForLoadState("networkidle", { timeout: 60000 });
-    } catch (fallbackErr) {
-      throw new Error("❌ Could not reach Connections page: " + fallbackErr.message);
+  await page.goto(
+    "https://www.linkedin.com/mynetwork/invite-connect/connections/",
+    {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
     }
-  }
+  );
+  await randomDelay(5000, 8000);
 
-  // Check if we got blocked
-  const currentUrl = page.url();
-  if (/checkpoint|login|security/i.test(currentUrl)) {
-    throw new Error("❌ LinkedIn redirected to verification page: " + currentUrl);
-  }
+  let previousCount = alreadyFetchedUrls.size;
+  const connectionsSet = new Set(alreadyFetchedUrls);
+  let scrollAttempts = 0;
 
-  console.log("✅ Connections page loaded!");
+  const container = page.locator("main#workspace").last();
 
-  // Wait for at least one connection card to appear
-  await page.waitForSelector("a[data-view-name='connections-profile']", { timeout: 30000 });
-
-  // ---- Your scraping logic continues here ----
-  const connections = new Set(alreadyFetchedUrls);
-
-  // Scroll and extract (same as your old code)
-  let prevHeight = 0;
   while (true) {
-    const newConnections = await page.$$eval(
+    await container.evaluate((el) => el.scrollBy(0, 400));
+    await randomDelay(800, 1500);
+    await page
+      .waitForSelector("a[data-view-name='connections-profile']", {
+        timeout: 5000,
+      })
+      .catch(() => {});
+
+    const loadedConnections = await page.$$eval(
       "a[data-view-name='connections-profile']",
-      anchors => anchors.map(a => ({
-        name: a.innerText.trim(),
-        profileUrl: a.href
-      }))
+      (els) => els.map((el) => el.href)
     );
+    loadedConnections.forEach((url) => connectionsSet.add(url));
 
-    newConnections.forEach(c => connections.add(JSON.stringify(c)));
+    if (connectionsSet.size === previousCount) {
+      scrollAttempts++;
+    } else {
+      scrollAttempts = 0;
+      previousCount = connectionsSet.size;
+    }
 
-    const currHeight = await page.evaluate("document.body.scrollHeight");
-    if (currHeight === prevHeight) break; // reached bottom
-    prevHeight = currHeight;
-
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
-    await page.waitForTimeout(2000 + Math.floor(Math.random() * 2000));
+    if (scrollAttempts >= 10) break;
+    if (previousCount % 50 === 0) await randomDelay(3000, 6000);
   }
 
-  const results = Array.from(connections).map(c => JSON.parse(c));
-  console.log(`✅ Total connections extracted via UI: ${results.length}`);
+  const connections = await page.$$eval(
+    "div[componentkey^='auto-component-']",
+    (cards) =>
+      cards
+        .map((card) => {
+          const firstAnchor = card.querySelector(
+            'a[data-view-name="connections-profile"]'
+          );
+          const profileImageEl = firstAnchor?.querySelector("figure img");
 
-  return results;
+          const infoAnchor =
+            card.querySelectorAll(
+              'a[data-view-name="connections-profile"]'
+            )[1] || firstAnchor;
+          const anchorPs = infoAnchor
+            ? Array.from(infoAnchor.querySelectorAll("p"))
+            : [];
+          const nameEl =
+            anchorPs[0]?.querySelector("a") || card.querySelector("p a");
+
+          const headlineText = anchorPs[1]?.innerText?.trim() || null;
+
+          const connectedDateEl = Array.from(card.querySelectorAll("p")).find(
+            (p) => /Connected on/i.test(p.innerText || "")
+          );
+
+          const profileUrl =
+            (firstAnchor?.href || infoAnchor?.href || "").split("?")[0] || null;
+
+          return {
+            name: nameEl?.innerText?.trim() || null,
+            profileUrl,
+            headline: headlineText,
+            connectedOn: connectedDateEl
+              ? connectedDateEl.innerText
+                  .replace(/^\s*Connected on\s*/i, "")
+                  .trim()
+              : null,
+            profileImageUrl: profileImageEl?.src || null,
+          };
+        })
+        .filter((c) => c.name && c.profileUrl)
+  );
+
+  console.log(`✅ Total connections extracted via UI: ${connections.length}`);
+  return connections;
 }
 
+// async function scrapeConnectionsUI(page, alreadyFetchedUrls = new Set()) {
+//   console.log("📂 Navigating to Connections page...");
+
+//   try {
+//     // Try direct navigation first
+//     await page.goto("https://www.linkedin.com/mynetwork/invite-connect/connections/", {
+//       waitUntil: "networkidle",
+//       timeout: 120000, // 2 minutes
+//     });
+//   } catch (err) {
+//     console.log("⚠️ Direct navigation failed, trying fallback via UI...");
+//     try {
+//       // Go to feed first
+//       await page.goto("https://www.linkedin.com/feed/", {
+//         waitUntil: "domcontentloaded",
+//         timeout: 60000,
+//       });
+
+//       // Click "My Network"
+//       await page.waitForSelector("a[data-test-global-nav-link='mynetwork']", { timeout: 15000 });
+//       await page.click("a[data-test-global-nav-link='mynetwork']");
+
+//       // Then "Connections"
+//       await page.waitForSelector("a[href*='/mynetwork/invite-connect/connections/']", { timeout: 15000 });
+//       await page.click("a[href*='/mynetwork/invite-connect/connections/']");
+
+//       await page.waitForLoadState("networkidle", { timeout: 60000 });
+//     } catch (fallbackErr) {
+//       throw new Error("❌ Could not reach Connections page: " + fallbackErr.message);
+//     }
+//   }
+
+//   // Check if we got blocked
+//   const currentUrl = page.url();
+//   if (/checkpoint|login|security/i.test(currentUrl)) {
+//     throw new Error("❌ LinkedIn redirected to verification page: " + currentUrl);
+//   }
+
+//   console.log("✅ Connections page loaded!");
+
+//   // Wait for at least one connection card to appear
+//   await page.waitForSelector("a[data-view-name='connections-profile']", { timeout: 30000 });
+
+//   // ---- Your scraping logic continues here ----
+//   const connections = new Set(alreadyFetchedUrls);
+
+//   // Scroll and extract (same as your old code)
+//   let prevHeight = 0;
+//   while (true) {
+//     const newConnections = await page.$$eval(
+//       "a[data-view-name='connections-profile']",
+//       anchors => anchors.map(a => ({
+//         name: a.innerText.trim(),
+//         profileUrl: a.href
+//       }))
+//     );
+
+//     newConnections.forEach(c => connections.add(JSON.stringify(c)));
+
+//     const currHeight = await page.evaluate("document.body.scrollHeight");
+//     if (currHeight === prevHeight) break; // reached bottom
+//     prevHeight = currHeight;
+
+//     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+//     await page.waitForTimeout(2000 + Math.floor(Math.random() * 2000));
+//   }
+
+//   const results = Array.from(connections).map(c => JSON.parse(c));
+//   console.log(`✅ Total connections extracted via UI: ${results.length}`);
+
+//   return results;
+// }
+
+// async function scrapeConnectionsUI(page, alreadyFetchedUrls = new Set()) {
+//   console.log("📂 Navigating to Connections page...");
+
+//   try {
+//     await page.goto(
+//       "https://www.linkedin.com/mynetwork/invite-connect/connections/",
+//       {
+//         waitUntil: "networkidle",
+//         timeout: 120000,
+//       }
+//     );
+//   } catch (err) {
+//     console.log("⚠️ Direct navigation failed, trying fallback via UI...");
+//     try {
+//       await page.goto("https://www.linkedin.com/feed/", {
+//         waitUntil: "domcontentloaded",
+//         timeout: 60000,
+//       });
+
+//       await page.waitForSelector("a[data-test-global-nav-link='mynetwork']", {
+//         timeout: 15000,
+//       });
+//       await page.click("a[data-test-global-nav-link='mynetwork']");
+
+//       // Click "My Network" via aria-label or href
+//       await page.waitForSelector("a[href*='/mynetwork/']", { timeout: 15000 });
+//       await page.click("a[href*='/mynetwork/']");
+//       await page.waitForTimeout(2000);
+//       await page.waitForLoadState("networkidle", { timeout: 60000 });
+//     } catch (fallbackErr) {
+//       throw new Error(
+//         "❌ Could not reach Connections page: " + fallbackErr.message
+//       );
+//     }
+//   }
+
+//   // Safety check
+//   const currentUrl = page.url();
+//   if (/checkpoint|login|security/i.test(currentUrl)) {
+//     throw new Error(
+//       "❌ LinkedIn redirected to verification page: " + currentUrl
+//     );
+//   }
+
+//   console.log("✅ Connections page loaded!");
+
+//   // Wait for at least one connection card
+//   await page.waitForSelector("a[data-view-name='connections-profile']", {
+//     timeout: 30000,
+//   });
+
+//   // Scrollable container (not the body!)
+//   const container = page.locator("main#workspace").last();
+
+//   let prevCount = 0;
+//   let idleRounds = 0;
+//   const connections = new Set(alreadyFetchedUrls);
+
+//   while (idleRounds < 10) {
+//     // Scroll down
+//     await container.evaluate((el) => el.scrollBy(0, 600));
+//     await page.waitForTimeout(1500 + Math.floor(Math.random() * 1500));
+
+//     // Collect connections
+//     const newConnections = await page.$$eval(
+//       "a[data-view-name='connections-profile']",
+//       (anchors) =>
+//         anchors.map((a) => ({
+//           name: a.innerText.trim(),
+//           profileUrl: a.href.split("?")[0],
+//         }))
+//     );
+
+//     newConnections.forEach((c) => connections.add(JSON.stringify(c)));
+
+//     const currentCount = connections.size;
+//     if (currentCount === prevCount) {
+//       idleRounds++;
+//     } else {
+//       idleRounds = 0;
+//       prevCount = currentCount;
+//     }
+
+//     if (currentCount % 50 === 0) {
+//       await page.waitForTimeout(3000); // pause every 50
+//     }
+//   }
+
+//   const results = Array.from(connections).map((c) => JSON.parse(c));
+//   console.log(`✅ Total connections extracted via UI: ${results.length}`);
+
+//   return results;
+// }
 
 // ---------- MAIN TEST ----------
 test("LinkedIn login + scrape all connections (UI full scroll only)", async ({}) => {
   test.setTimeout(30 * 60 * 1000); // 30 minutes
   const { LINKEDIN_EMAIL, LINKEDIN_PASSWORD, LINKEDIN_TOTP_SECRET } =
     process.env;
+  
   let freshLogin = false;
 
   const browser = await chromium.launch({ headless: false });
@@ -412,3 +506,32 @@ test("LinkedIn login + scrape all connections (UI full scroll only)", async ({})
   await ensureHeaders();
   await saveToGoogleSheets(allConnections);
 });
+
+// function testInit(LINKEDIN_EMAIL, LINKEDIN_PASSWORD, LINKEDIN_TOTP_SECRET) {
+//   console.log("Function fun1 executed"+ {LINKEDIN_EMAIL, LINKEDIN_PASSWORD, LINKEDIN_TOTP_SECRET});
+// }
+
+// testInit(`Hello `, `Gopi`, `Krisna`);
+
+//const { LINKEDIN_EMAIL, LINKEDIN_PASSWORD, LINKEDIN_TOTP_SECRET, Action  } =
+  /*
+  Action:{
+    type:"ConnectionReq",
+    profileUrl:"https://www.linkedin.com/in/some-profile/",
+    inMessage:"Hello, how are you?",
+  inSubject:"Just saying hi!"
+  },
+  Action:{
+  type:"VisitProfile",
+  profileUrl:"https://www.linkedin.com/in/some-profile/"
+  }
+  Action:{
+  type:"LikeRecentPost",
+  profileUrl:"https://www.linkedin.com/in/some-profile/"'
+  }
+  Action:{
+  type:"SendMessage",
+  profileUrl:"https://www.linkedin.com/in/some-profile/",
+  message:"Hello, how are you?"
+  }
+   */
