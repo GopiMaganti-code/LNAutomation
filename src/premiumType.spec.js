@@ -7,7 +7,7 @@ const fs = require("fs");
 // Local storage file to save LinkedIn session state
 // const STORAGE_FILE = process.env.STORAGE_FILE || "linkedinStealth-state-Lokesh.json";
 const STORAGE_FILE =
-  process.env.STORAGE_FILE || "linkedinStealth-state-Lokesh.json";
+  process.env.STORAGE_FILE || "linkedinStealth-state-Gopi.json";
 
 /* ---------------------------
    Human-like helpers
@@ -332,73 +332,6 @@ test("LinkedIn stealth login -> random actions -> Type of Account", async () => 
     .catch(() => {});
   await humanIdle(800, 1800);
 
-  // await page
-  //   .locator(
-  //     `.profile-card-member-details [href='https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo']`
-  //   )
-  //   .waitFor({ state: "visible", timeout: 10000 })
-  //   .catch(() => {});
-  // const isPremium =
-  //   (await page
-  //     .locator(
-  //       `.profile-card-member-details [href='https://static.licdn.com/aero-v1/sc/h/7lputkpzv6s224ks0n6c7h2qo']`
-  //     )
-  //     .count()) > 0;
-  // console.log(`🔶 Premium account: ${isPremium ? "Yes" : "No"}`);
-  // await humanIdle(2000, 4000);
-  // // // If premium go to premium page -- Approach 1
-  // // if (isPremium) {
-  // //   await page.goto("https://www.linkedin.com/mypreferences/d/premium-manage-account", {
-  // //     waitUntil: "domcontentloaded",
-  // //   });
-  // //   const plan = await page
-  // //     .locator('.sans-medium.t-bold.t-black.premium-subscription-overview-settings-card__header')
-  // //     .innerText()
-  // //     .catch(() => "Unknown");
-  // //   console.log(`🔶 Plan details: ${plan.trim()}`);
-  // //   await humanIdle(2000, 4000);
-  // // }
-
-  // // If premium click on profile icon and go to setting then go to Subscriptions & payments and clcik on Manage Premium account grab the plan details
-  // // Approach 2
-
-  // if (isPremium) {
-  //   console.log("🔶 Navigating to plan details page...");
-  //   // Click on Me button
-  //   const meBtn = page.locator(
-  //     `nav button:has-text('Me')`
-  //   );
-    
-  //   if (await meBtn.isVisible()) {
-  //     await meBtn.click();
-  //     await randomDelay(500, 1200);
-  //     // Click on Settings & Privacy
-
-  //     const settings = page.locator(
-  //       'a:has-text("Settings & Privacy")'
-  //     );
-  //     await settings.first().click();
-  //     await page.waitForLoadState("domcontentloaded");
-  //     await humanIdle(2000, 5000);
-  //     // Now on settings page, go to Subscriptions & payments
-
-  //     const subscriptions = page.locator(
-  //       'li #premiumManageAccount, li a[href*="premium"]'
-  //     );
-  //     await subscriptions.first().click();
-  //     await page.waitForLoadState("domcontentloaded");
-  //     await humanIdle(2000, 5000);
-  //     // Now on premium account page, grab plan details
-
-  //     const plan = await page
-  //     .locator('.sans-medium.t-bold.t-black.premium-subscription-overview-settings-card__header')
-  //     .innerText()
-  //     .catch(() => "Unknown");
-  //   console.log(`🔶 Plan details: ${plan.trim()}`);
-  //   await humanIdle(2000, 4000);
-      
-  //   }
-  // }
 
   console.log("🔶 Checking LinkedIn premium status...");
   await humanIdle(1000, 2500);

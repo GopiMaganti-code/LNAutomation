@@ -7,7 +7,7 @@ const fs = require("fs");
 // Local storage file to save LinkedIn session state
 // const STORAGE_FILE = process.env.STORAGE_FILE || "linkedinStealth-state-Lokesh.json";
 const STORAGE_FILE =
-  process.env.STORAGE_FILE || "linkedinStealth-state-Gopi.json";
+  process.env.STORAGE_FILE || "linkedinStealth-state-Lokesh.json";
 
 /* ---------------------------
    Human-like helpers
@@ -276,7 +276,7 @@ test("LinkedIn stealth login -> random actions -> open Post Impressions", async 
         .locator('#two-step-submit-button, button[type="submit"]')
         .first()
         .click();
-    } 
+    }
 
     // Wait for feed or final redirect
     await page
@@ -319,9 +319,22 @@ test("LinkedIn stealth login -> random actions -> open Post Impressions", async 
     .catch(() => {});
   await humanIdle(800, 1800);
 
-  await page.goto("https://www.linkedin.com/analytics/creator/content/", {
-    waitUntil: "domcontentloaded",
-  });
+  const postImpressions = page
+    .locator(
+      `.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('Post impressions')`
+    )
+    .first();
+  if (await postImpressions.count()) {
+    await postImpressions.click().catch(() => {});
+  }
+  const viewAllAnalytics = page
+    .locator(`.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('View all analytics')`)
+    .first();
+  if (await viewAllAnalytics.count()) {
+    await viewAllAnalytics.click().catch(() => {});
+    await randomDelay(1500, 3500);
+    await page.locator(`.pcd-analytic-view-items-container [href*='https://www.linkedin.com/analytics/creator/content']`).first().click().catch(() => {});
+  }
   await page.waitForLoadState("domcontentloaded").catch(() => {});
   console.log("Opened Post Impressions / Creator Analytics");
   await humanIdle(1200, 2400);
@@ -349,7 +362,10 @@ test("LinkedIn stealth login -> random actions -> open Post Impressions", async 
     `div[id*='artdeco-hoverable-artdeco-gen'] div[class='artdeco-hoverable-content__content'] button[aria-label='This button will apply your selected item']`
   );
   if (await applyBtn.count()) {
-    await applyBtn.first().click().catch(() => {});
+    await applyBtn
+      .first()
+      .click()
+      .catch(() => {});
     console.log("Applied filter");
     await humanIdle(2000, 4000);
   }
