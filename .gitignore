@@ -1,0 +1,59 @@
+# Node dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+*.zip
+
+# VS Code settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# State files
+*-state.json
+
+echo "credentials/your-service-account.json" >> .gitignore
+git add .gitignore
+git commit -m "Ignore service account credentials"
+
+# Environment files
+.env
+
+# Google Cloud credentials
+linkedin-states/credentials/
+*.key
+*.pem
+
+# JSON state and session data
+linkedinStealth-state*.json
+ocean*.json
+
+# CSV data exports
+*.csv
+
+# Playwright test results and screenshots
+test-results/
+*.png
+
+# Node modules
+node_modules/
+
+# System files
+.DS_Store
+Thumbs.db
+
+
