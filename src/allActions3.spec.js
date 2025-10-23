@@ -14,7 +14,7 @@ const PROFILE_URLS = (process.env.PROFILE_URLS || "")
 const ACTION = process.env.ACTION || "view_feed"; // Default action
 
 /* ---------------------------
-   Human-like helpers
+    Human-like Interaction Helpers
 --------------------------- */
 async function randomDelay(min = 200, max = 1200) {
   const t = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -55,6 +55,10 @@ async function humanIdle(min = 2000, max = 6000) {
   const wait = Math.floor(Math.random() * (max - min + 1)) + min;
   await new Promise((r) => setTimeout(r, wait));
 }
+
+/* ---------------------------
+    Close All Message Boxes Helper
+--------------------------- */
 
 async function closeAllMessageBoxes(page) {
   console.log("🗑️ Closing all open message boxes...");
@@ -122,6 +126,10 @@ async function addStealth(page) {
 /* ---------------------------
    Action Functions
 --------------------------- */
+
+/* ---------------------------
+   View Feed Action
+--------------------------- */
 async function viewFeed(page) {
   console.log("📺 Starting to view LinkedIn feed...");
   try {
@@ -165,6 +173,9 @@ async function viewFeed(page) {
     console.error("❌ Failed to view feed:", err.message);
   }
 }
+/* ---------------------------
+    Like Feed Action
+--------------------------- */
 
 async function likeFeed(page) {
   console.log("📝 Starting to like a random post...");
@@ -213,6 +224,10 @@ async function likeFeed(page) {
     console.error("❌ Failed to like post:", err.message);
   }
 }
+
+/* ---------------------------
+   Check Degree Action
+--------------------------- */
 
 async function checkDegree(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
@@ -294,6 +309,10 @@ async function checkDegree(page, url) {
     console.error(`❌ Error processing ${url}: ${err.message}`);
   }
 }
+
+/* ---------------------------
+   Send Message Action
+--------------------------- */
 
 async function sendMessage(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
@@ -424,6 +443,10 @@ async function sendMessage(page, url) {
   }
 }
 
+/* --------------------------------
+   Check Connection Accepted Action
+------------------------------------ */
+
 async function checkConnectionAccepted(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
@@ -523,45 +546,77 @@ async function checkConnectionAccepted(page, url) {
   }
 }
 
+/* ---------------------------
+    Check Reply Action
+--------------------------- */
+
 async function checkReply(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await randomDelay(4000, 6000); // Increased delay for page stability
-    const closeButton = page
-      .locator("button:has-text('Close your conversation')")
-      .first();
-    const altClose = page
-      .locator(".msg-overlay-bubble-header__control svg[use*='close-small']")
-      .first();
+    const closeButton = page.locator("button:has-text('Close your conversation')").first();
+    const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
     if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
       await closeButton.click();
     }
     let profileName = "Unknown";
-    try {
-      profileName =
-        (await page
-          .locator("h1")
-          .textContent({ timeout: 5000 })
-          .then((text) => text.trim())) || "Unknown";
-      console.log(`🔍 Found profile name: ${profileName}`);
-    } catch (err) {
-      console.log(`⚠️ Profile name not found: ${err.message}`);
+    const nameLocators = [
+      "h1",
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+      // For Structure 1
+      "a[aria-label] h1",
+      'a[href*="/in/"] h1',
+      // For Structure 2
+      'div[data-view-name="profile-top-card-verified-badge"] p',
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
+    ];
+    for (const selector of nameLocators) {
+      try {
+        const text = await page.locator(selector).textContent({ timeout: 3000 });
+        if (text && text.trim()) {
+          profileName = text.trim();
+          console.log(`👤 Found profile name: "${profileName}" (via ${selector})`);
+          break;
+        }
+      } catch {
+        // silent fail, try next
+      }
     }
     let replyStatus = "No Reply Received";
-    const messageButton = page
-      .locator(".ph5 button:has-text('Message')")
-      .first();
-    if (await messageButton.isVisible({ timeout: 10000 }).catch(() => false)) {
-      // 10-second timeout
+    const messageButtonLocators = [
+      {
+        selector: "div.ph5 button:has-text('Message')",
+        description: "old message button",
+      },
+      {
+        selector: 'a[data-view-name="profile-primary-message"]',
+        description: "primary message last",
+      },
+      {
+        selector: 'a[data-view-name="profile-secondary-message"]',
+        description: "secondary message last",
+      },
+    ];
+    let messageButton = null;
+    for (const { selector, description } of messageButtonLocators) {
+      try {
+        const btn = page.locator(selector).last();
+        await btn.waitFor({ state: "visible", timeout: 3000 });
+        messageButton = btn;
+        console.log(`✅ Found message button (${description})`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+    if (messageButton) {
       console.log(`✅ Message button found for ${profileName}`);
       await messageButton.click();
       await randomDelay(4000, 7000);
 
       // Check for all reply messages
-      const replyElements = await page
-        .locator(".msg-s-event-listitem--other")
-        .all();
+      const replyElements = await page.locator(".msg-s-event-listitem--other").all();
       if (replyElements.length > 0) {
         replyStatus = "Reply Received";
         console.log(`Sender: ${profileName}`);
@@ -569,57 +624,32 @@ async function checkReply(page, url) {
 
         // Get sender and timestamp from the first reply element as a fallback
         const firstReply = replyElements[0];
-        let senderName = await firstReply
-          .locator(".msg-s-message-group__name")
-          .textContent({ timeout: 5000 })
-          .catch(() => profileName);
-        let timestamp = await firstReply
-          .locator(".msg-s-message-group__timestamp")
-          .textContent({ timeout: 5000 })
-          .catch(() => "Unknown Time");
+        let senderName = await firstReply.locator(".msg-s-message-group__name").textContent({ timeout: 5000 }).catch(() => profileName);
+        let timestamp = await firstReply.locator(".msg-s-message-group__timestamp").textContent({ timeout: 5000 }).catch(() => "Unknown Time");
 
         for (let i = 0; i < replyElements.length; i++) {
           const replyElement = replyElements[i];
-          const messageText = await replyElement
-            .locator(".msg-s-event-listitem__body")
-            .textContent({ timeout: 5000 })
-            .catch(() => "Unable to retrieve message");
+          const messageText = await replyElement.locator(".msg-s-event-listitem__body").textContent({ timeout: 5000 }).catch(() => "Unable to retrieve message");
           console.log(
-            `- Message ${i + 1}: From ${senderName
-              .trim()
-              .replace(/\s+/g, " ")} at ${timestamp
-              .trim()
-              .replace(/\s+/g, " ")} - "${
-              messageText.trim() || "No readable message content"
-            }"`
+            `- Message ${i + 1}: From ${senderName.trim().replace(/\s+/g, " ")} at ${timestamp.trim().replace(/\s+/g, " ")} - "${messageText.trim() || "No readable message content"}"`
           );
         }
       } else {
         console.log(`Sender: ${profileName}`);
-        console.log(
-          `  - Reply Status: ${replyStatus} (No reply elements found)`
-        );
+        console.log(`  - Reply Status: ${replyStatus} (No reply elements found)`);
       }
 
       // Close message box
-      const closeButton = page
-        .locator("button:has-text('Close your conversation')")
-        .first();
-      const altClose = page
-        .locator(".msg-overlay-bubble-header__control svg[use*='close-small']")
-        .first();
+      const closeButton = page.locator("button:has-text('Close your conversation')").first();
+      const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
       if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
         await closeButton.click();
-      } else if (
-        await altClose.isVisible({ timeout: 5000 }).catch(() => false)
-      ) {
+      } else if (await altClose.isVisible({ timeout: 5000 }).catch(() => false)) {
         await altClose.click();
       }
       await randomDelay(1000, 2000);
     } else {
-      console.log(
-        `⚠️ Message button not found for ${profileName} after 10 seconds`
-      );
+      console.log(`⚠️ Message button not found for ${profileName} after 10 seconds`);
       console.log(`Sender: ${profileName}`);
       console.log(`  - Reply Status: No Reply Received (No Message Button)`);
     }
@@ -629,98 +659,9 @@ async function checkReply(page, url) {
   }
 }
 
-// async function sendFollow(page, url) {
-//   console.log(`🌐 Visiting: ${url} to follow 3rd degree connection`);
-//   try {
-//     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-//     await randomDelay(1000, 3000);
-//     let profileName = "Unknown";
-//     try {
-//       profileName =
-//         (await page
-//           .locator("h1")
-//           .textContent({ timeout: 5000 })
-//           .then((text) => text.trim())) || "Unknown";
-//     } catch (err) {
-//       console.log(`⚠️ Profile name not found: ${err.message}`);
-//     }
-//     let degree = "Unknown";
-//     try {
-//       let degreeText = await page
-//         .locator(".distance-badge .dist-value")
-//         .textContent({ timeout: 5000 })
-//         .catch(() => "");
-//       if (!degreeText)
-//         degreeText = await page
-//           .locator(".distance-badge .visually-hidden")
-//           .textContent({ timeout: 5000 })
-//           .catch(() => "");
-//       degree = degreeText.toLowerCase().includes("3rd")
-//         ? "3rd"
-//         : degreeText.toLowerCase().includes("2nd")
-//         ? "2nd"
-//         : degreeText.toLowerCase().includes("1st")
-//         ? "1st"
-//         : "Unknown";
-//     } catch (err) {
-//       console.log(`⚠️ Degree not found: ${err.message}`);
-//     }
-//     if (degree === "3rd") {
-//       let followButton = page
-//         .locator(".ph5.pb5 [aria-label*='Follow']")
-//         .first();
-//       if (await followButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-//         await followButton.click();
-//         console.log(`✅ Followed ${profileName} via header`);
-//       } else {
-//         followButton = page.locator(".ph5 [aria-label*='Follow']").first();
-//         if (
-//           await followButton.isVisible({ timeout: 5000 }).catch(() => false)
-//         ) {
-//           await followButton.click();
-//           console.log(`✅ Followed ${profileName} via secondary header`);
-//         } else {
-//           const moreButton = page
-//             .locator(".ph5 [aria-label='More actions']")
-//             .first();
-//           if (
-//             await moreButton.isVisible({ timeout: 5000 }).catch(() => false)
-//           ) {
-//             await moreButton.click();
-//             await randomDelay(1000, 2000);
-//             const dropdownFollow = page
-//               .locator(
-//                 ".ph5.pb5 .artdeco-dropdown__content-inner [aria-label*='Follow']"
-//               )
-//               .first();
-//             if (
-//               await dropdownFollow
-//                 .isVisible({ timeout: 5000 })
-//                 .catch(() => false)
-//             ) {
-//               await dropdownFollow.click();
-//               console.log(`✅ Followed ${profileName} via More actions`);
-//             } else {
-//               console.log(
-//                 `⚠️ Follow option not found in dropdown for ${profileName}`
-//               );
-//             }
-//           } else {
-//             console.log(`⚠️ No More actions button found for ${profileName}`);
-//           }
-//         }
-//       }
-//     } else {
-//       console.log(
-//         `⏭️ Skipping ${profileName} - Not a 3rd degree connection (Degree: ${degree})`
-//       );
-//     }
-//     await randomDelay(1000, 2000);
-//     console.log(`✅ Done with ${url}`);
-//   } catch (err) {
-//     console.error(`❌ Error following ${url}: ${err.message}`);
-//   }
-// }
+/* ---------------------------
+   Send Follow Action
+--------------------------- */
 
 async function sendFollow(page, url) {
   console.log(`🌐 Visiting: ${url} to follow 3rd degree connection`);
@@ -937,6 +878,292 @@ async function sendFollow(page, url) {
   }
 }
 
+/* ---------------------------
+   Send Follow Any Action
+--------------------------- */
+
+async function sendFollowAny(page, url) {
+  console.log(`🌐 Visiting: ${url} to follow (any degree)`);
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await randomDelay(1000, 3000);
+
+    // Step 1️⃣ — Extract Profile Name (Robust locators from sendFollow)
+    let profileName = "Unknown";
+    const nameLocators = [
+      "h1",
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+      "a[aria-label] h1",
+      'a[href*="/in/"] h1',
+      'div[data-view-name="profile-top-card-verified-badge"] p',
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
+    ];
+    for (const selector of nameLocators) {
+      try {
+        const text = await page
+          .locator(selector)
+          .textContent({ timeout: 3000 });
+        if (text && text.trim()) {
+          profileName = text.trim();
+          console.log(
+            `👤 Found profile name: "${profileName}" (via ${selector})`
+          );
+          break;
+        }
+      } catch {
+        // silent fail, try next
+      }
+    }
+
+    // Step 2️⃣ — Check if Already Following (Header-specific locators to avoid footer/dropdown matches)
+    const followingButtonLocators = [
+      {
+        selector: 'div[data-view-name="edge-creation-follow-action"] button[aria-label*="Following, click to unfollow"]',
+        description: "header edge-creation following button",
+      },
+      {
+        selector: 'div[data-view-name="relationship-building-button"] button[aria-label*="Following, click to unfollow"]',
+        description: "relationship-building header following button",
+      },
+      {
+        selector: ".ph5 button[aria-label*='Following']",
+        description: "ph5 header following button (scoped to button)",
+      },
+    ];
+
+    let isAlreadyFollowing = false;
+    for (const { selector, description } of followingButtonLocators) {
+      try {
+        const btn = page.locator(selector).nth(2); // Use .last() for selectors matching multiple elements
+        await btn.waitFor({ state: "visible", timeout: 3000 });
+        isAlreadyFollowing = true;
+        console.log(`⏭️ Skipping ${profileName} - Already following (detected via ${description})`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+
+    // Optional: If needed, check dropdown for following (requires opening More first)
+    if (!isAlreadyFollowing) {
+      // Temporarily open More to check dropdown following option
+      const moreButtonLocatorsTemp = [
+        {
+          selector: ".ph5 [aria-label='More actions']",
+          description: "more actions aria",
+        },
+        {
+          selector: 'button[data-view-name="profile-overflow-button"][aria-label="More"]',
+          description: "overflow more button",
+        },
+        {
+          selector: ".ph5.pb5 button:has-text('More')",
+          description: "more text button",
+        },
+      ];
+
+      let moreButtonTemp = null;
+      for (const { selector, description } of moreButtonLocatorsTemp) {
+        try {
+          const btn = page.locator(selector).last();
+          await btn.waitFor({ state: "visible", timeout: 3000 });
+          moreButtonTemp = btn;
+          console.log(`🔍 Temporarily opening more button (${description}) to check dropdown`);
+          break;
+        } catch {
+          // try next
+        }
+      }
+
+      if (moreButtonTemp) {
+        await humanMouse(page, 2);
+        await moreButtonTemp.click({ delay: 100 });
+        await randomDelay(1000, 2000);
+
+        const dropdownFollowingLocators = [
+          {
+            selector: ".artdeco-dropdown__content div[aria-label*='Unfollow']",
+            description: "dropdown unfollow div aria-label",
+          },
+          {
+            selector: `div[role="menu"] div[aria-label*="Following, click to unfollow"]`,
+            description: "global following aria-label in dropdown",
+          },
+        ];
+
+        let dropdownFollowing = null;
+        for (const { selector, description } of dropdownFollowingLocators) {
+          try {
+            const elem = page.locator(selector).last(); // Use .last() for selectors matching multiple elements
+            await elem.waitFor({ state: "visible", timeout: 2000 });
+            dropdownFollowing = elem;
+            console.log(`⏭️ Skipping ${profileName} - Already following in dropdown (detected via ${description})`);
+            isAlreadyFollowing = true;
+            break;
+          } catch {
+            // try next
+          }
+        }
+
+        // Close dropdown
+        await moreButtonTemp.click({ delay: 100 });
+        await randomDelay(500, 1000);
+      }
+    }
+
+    if (!isAlreadyFollowing) {
+      // Step 3️⃣ — Locate Follow Button (Robust array like sendFollow)
+      const followButtonLocators = [
+        {
+          selector: ".ph5.pb5 [aria-label*='Follow']",
+          description: "header follow button primary / secondary",
+        },
+        {
+          selector: 'a[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label*="Follow"]',
+          description: "primary-message adjacent relationship follow aria",
+        },
+        {
+          selector: 'a[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-follow-action"] button:has(svg[id="add-small"])',
+          description: "primary-message adjacent edge-creation follow icon",
+        },
+        {
+          selector: 'a[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button:has(span:has-text("Follow"))',
+          description: "primary-message adjacent relationship follow text",
+        },
+        {
+          selector: 'div[componentkey*="Topcard"]:has(a[data-view-name="profile-primary-message"]) div[data-view-name="relationship-building-button"] button[aria-label*="Follow"]',
+          description: "topcard with primary-message relationship follow aria",
+        },
+        {
+          selector: 'div[componentkey*="Topcard"]:has(a[data-view-name="profile-secondary-message"]) div[data-view-name="relationship-building-button"] button[aria-label*="Follow"]',
+          description: "topcard with secondary-message relationship follow aria",
+        },
+        {
+          selector: 'div[componentkey*="Topcard"]:has(a[data-view-name="profile-secondary-message"]) div[data-view-name="edge-creation-follow-action"] button:has(svg[id="add-small"])',
+          description: "topcard with secondary-message edge-creation follow icon",
+        },
+        {
+          selector: 'div[componentkey*="Topcard"]:has(a[data-view-name="profile-secondary-message"]) div[data-view-name="relationship-building-button"] button:has(span:has-text("Follow"))',
+          description: "topcard with secondary-message relationship follow text",
+        },
+      ];
+
+      let followButton = null;
+      for (const { selector, description } of followButtonLocators) {
+        try {
+          const btn = page.locator(selector).last();
+          await btn.waitFor({ state: "visible", timeout: 3000 });
+          followButton = btn;
+          console.log(`✅ Found follow button (${description})`);
+          break;
+        } catch {
+          // try next
+        }
+      }
+
+      if (followButton) {
+        // Step 4️⃣ — Click Follow Button
+        await humanMouse(page, 2);
+        await followButton.click({ delay: 100 });
+        console.log(`✅ Followed ${profileName} via direct button`);
+      } else {
+        // Step 5️⃣ — Fallback: More Actions Path (Robust locators)
+        const moreButtonLocators = [
+          {
+            selector: ".ph5 [aria-label='More actions']",
+            description: "more actions aria",
+          },
+          {
+            selector: 'button[data-view-name="profile-overflow-button"][aria-label="More"]',
+            description: "overflow more button",
+          },
+          {
+            selector: ".ph5.pb5 button:has-text('More')",
+            description: "more text button",
+          },
+        ];
+
+        let moreButton = null;
+        for (const { selector, description } of moreButtonLocators) {
+          try {
+            const btn = page.locator(selector).last();
+            await btn.waitFor({ state: "visible", timeout: 3000 });
+            moreButton = btn;
+            console.log(`✅ Found more button (${description})`);
+            break;
+          } catch {
+            // try next
+          }
+        }
+
+        if (moreButton) {
+          await humanMouse(page, 2);
+          await moreButton.click({ delay: 100 });
+          console.log("💡 More button clicked");
+          await randomDelay(1000, 2000);
+
+          // Step 6️⃣ — Locate Dropdown Follow (Robust array)
+          const dropdownFollowLocators = [
+            {
+              selector: ".ph5.pb5 .artdeco-dropdown__content-inner [aria-label*='Follow']",
+              description: "dropdown aria follow",
+            },
+            {
+              selector: ".artdeco-dropdown__content-inner span:has-text('Follow')",
+              description: "dropdown text follow",
+            },
+            {
+              selector: ".artdeco-dropdown__content a[aria-label*='Follow']",
+              description: "dropdown link follow",
+            },
+            {
+              selector: "div[aria-label*='Follow']",
+              description: "dropdown area follow",
+            },
+          ];
+
+          let dropdownFollow = null;
+          for (const { selector, description } of dropdownFollowLocators) {
+            try {
+              const btn = page.locator(selector).last();
+              await btn.waitFor({ state: "visible", timeout: 3000 });
+              dropdownFollow = btn;
+              console.log(`✅ Found dropdown follow (${description})`);
+              break;
+            } catch {
+              // try next
+            }
+          }
+
+          if (dropdownFollow) {
+            await humanMouse(page, 1);
+            await dropdownFollow.click({ delay: 100 });
+            console.log(`✅ Followed ${profileName} via More actions dropdown`);
+          } else {
+            console.log(`⚠️ Follow option not found in dropdown for ${profileName}`);
+          }
+
+          // Close dropdown after action
+          await moreButton.click({ delay: 100 });
+          await randomDelay(500, 1000);
+        } else {
+          console.log(`⚠️ No More actions button found for ${profileName}`);
+        }
+      }
+    }
+
+    await randomDelay(1000, 2000);
+    console.log(`✅ Done with ${url}`);
+    console.log(`----------------------------`);
+  } catch (err) {
+    console.error(`❌ Error following ${url}: ${err.message}`);
+  }
+}
+
+/* ---------------------------
+    Withdraw Request Action
+------------------------------ */
+
 async function withdrawRequest(page, url) {
   console.log(`🌐 Visiting: ${url} to withdraw request`);
   try {
@@ -1070,7 +1297,6 @@ async function checkPremiumStatus(page) {
 /* ---------------------------
    Send Message Function (No Degree Check)
 --------------------------- */
-
 
 async function sendMessageToProfile(page, url) {
   console.log(`💬 Processing profile for messaging: ${url}`);
@@ -1241,8 +1467,6 @@ async function sendMessageToProfile(page, url) {
   }
 }
 
-
-
 /* ---------------------------
    Helper Functions (Latest Versions - Duplicates Removed)
 --------------------------- */
@@ -1276,6 +1500,10 @@ async function getVisibleLocator(
   return null;
 }
 
+/* ---------------------------
+    Text Extraction Helper
+--------------------------- */
+
 async function getTextFromSelectors(page, selectors, timeout = 5000) {
   for (const selector of selectors) {
     try {
@@ -1292,6 +1520,10 @@ async function getTextFromSelectors(page, selectors, timeout = 5000) {
   }
   return null;
 }
+
+/* ---------------------------
+    Degree Detection Helper
+--------------------------- */
 
 async function detectDegree(page, timeout = 5000) {
   let degree = "unknown";
@@ -1348,6 +1580,10 @@ async function detectDegree(page, timeout = 5000) {
   console.log(`📊 Detected degree: ${degree}`);
   return degree;
 }
+
+/* ---------------------------
+    Send Connection Request Action
+--------------------------- */
 
 async function sendConnectionRequest(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
@@ -1502,7 +1738,9 @@ async function sendConnectionRequest(page, url) {
   }
 }
 
-// Function for checking the verification status of the owner of a LinkedIn profile
+/* ------------------------------------------------------
+    Navigate to Own Profile and Check Verification Status
+--------------------------------------------------------- */
 async function navigateToOwnProfileAndCheckStatus(page) {
   console.log("👤 Navigating to own profile and checking status...");
   try {
@@ -1679,9 +1917,11 @@ async function navigateToOwnProfileAndCheckStatus(page) {
   }
 }
 
+
+
 /* ---------------------------
    Main Test - Perform Action
---------------------------- */
+------------------------------ */
 test.describe("LinkedIn Multi-Action Script", () => {
   let browser, context, page;
 
@@ -1772,63 +2012,127 @@ test.describe("LinkedIn Multi-Action Script", () => {
   });
 
   test("Perform Action", async () => {
-    test.setTimeout(20 * 60 * 1000); // 20 minutes
-    console.log(
-      `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
-    );
-    console.log("-------------------------------");
+  test.setTimeout(20 * 60 * 1000); // 20 minutes
+  console.log(
+    `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
+  );
+  console.log("-------------------------------");
 
-    const actions = {
-      view_feed: viewFeed,
-      like_feed: likeFeed,
-      check_degree: async () => {
-        for (const url of PROFILE_URLS) await checkDegree(page, url);
-      },
-      send_message: async () => {
-        for (const url of PROFILE_URLS) await sendMessage(page, url);
-      },
-      send_connection_request: async () => {
-        for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
-      },
-      check_connection_accepted: async () => {
-        for (const url of PROFILE_URLS)
-          await checkConnectionAccepted(page, url);
-      },
-      check_reply: async () => {
-        for (const url of PROFILE_URLS) await checkReply(page, url);
-      },
-      send_follow: async () => {
-        for (const url of PROFILE_URLS) await sendFollow(page, url);
-      },
-      withdraw_request: async () => {for (const url of PROFILE_URLS) await withdrawRequest(page, url);},
-      check_own_verification: navigateToOwnProfileAndCheckStatus,
-      send_message_premium: async () => {
-        const isPremiumUser = await checkPremiumStatus(page);
-        if (isPremiumUser && PROFILE_URLS.length > 0) {
-          console.log(
-            `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
-          );
-          for (const url of PROFILE_URLS) {
-            await sendMessageToProfile(page, url);
-            await humanIdle(3000, 6000); // Pause between profiles
-          }
-        } else if (!isPremiumUser) {
-          console.log("⛔ Not a premium user. Skipping message sending.");
-        } else {
-          console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
+  const actions = {
+    view_feed: viewFeed,
+    like_feed: likeFeed,
+    check_degree: async () => {
+      for (const url of PROFILE_URLS) await checkDegree(page, url);
+    },
+    send_message: async () => {
+      for (const url of PROFILE_URLS) await sendMessage(page, url);
+    },
+    send_connection_request: async () => {
+      for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
+    },
+    check_connection_accepted: async () => {
+      for (const url of PROFILE_URLS)
+        await checkConnectionAccepted(page, url);
+    },
+    check_reply: async () => {
+      for (const url of PROFILE_URLS) await checkReply(page, url);
+    },
+    send_follow: async () => {
+      for (const url of PROFILE_URLS) await sendFollow(page, url);
+    },
+    send_follow_any: async () => {
+      for (const url of PROFILE_URLS) await sendFollowAny(page, url);
+    },
+    withdraw_request: async () => {for (const url of PROFILE_URLS) await withdrawRequest(page, url);},
+    check_own_verification: navigateToOwnProfileAndCheckStatus,
+    send_message_premium: async () => {
+      const isPremiumUser = await checkPremiumStatus(page);
+      if (isPremiumUser && PROFILE_URLS.length > 0) {
+        console.log(
+          `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
+        );
+        for (const url of PROFILE_URLS) {
+          await sendMessageToProfile(page, url);
+          await humanIdle(3000, 6000); // Pause between profiles
         }
-      },
-    };
+      } else if (!isPremiumUser) {
+        console.log("⛔ Not a premium user. Skipping message sending.");
+      } else {
+        console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
+      }
+    },
+  };
 
-    const actionFunc = actions[ACTION];
-    if (actionFunc) await actionFunc(page);
-    else
-      console.log(
-        `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
-          actions
-        ).join(", ")}`
-      );
+  const actionFunc = actions[ACTION];
+  if (actionFunc) await actionFunc(page);
+  else
+    console.log(
+      `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
+        actions
+      ).join(", ")}`
+    );
 
-    await expect(page).toHaveURL(/linkedin\.com/);
-  });
+  await expect(page).toHaveURL(/linkedin\.com/);
+});
+
+  // test("Perform Action", async () => {
+  //   test.setTimeout(20 * 60 * 1000); // 20 minutes
+  //   console.log(
+  //     `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
+  //   );
+  //   console.log("-------------------------------");
+
+  //   const actions = {
+  //     view_feed: viewFeed,
+  //     like_feed: likeFeed,
+  //     check_degree: async () => {
+  //       for (const url of PROFILE_URLS) await checkDegree(page, url);
+  //     },
+  //     send_message: async () => {
+  //       for (const url of PROFILE_URLS) await sendMessage(page, url);
+  //     },
+  //     send_connection_request: async () => {
+  //       for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
+  //     },
+  //     check_connection_accepted: async () => {
+  //       for (const url of PROFILE_URLS)
+  //         await checkConnectionAccepted(page, url);
+  //     },
+  //     check_reply: async () => {
+  //       for (const url of PROFILE_URLS) await checkReply(page, url);
+  //     },
+  //     send_follow: async () => {
+  //       for (const url of PROFILE_URLS) await sendFollow(page, url);
+  //     },
+  //     withdraw_request: async () => {for (const url of PROFILE_URLS) await withdrawRequest(page, url);},
+  //     check_own_verification: navigateToOwnProfileAndCheckStatus,
+  //     send_message_premium: async () => {
+  //       const isPremiumUser = await checkPremiumStatus(page);
+  //       if (isPremiumUser && PROFILE_URLS.length > 0) {
+  //         console.log(
+  //           `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
+  //         );
+  //         for (const url of PROFILE_URLS) {
+  //           await sendMessageToProfile(page, url);
+  //           await humanIdle(3000, 6000); // Pause between profiles
+  //         }
+  //       } else if (!isPremiumUser) {
+  //         console.log("⛔ Not a premium user. Skipping message sending.");
+  //       } else {
+  //         console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
+  //       }
+  //     },
+  //   };
+
+  //   const actionFunc = actions[ACTION];
+  //   if (actionFunc) await actionFunc(page);
+  //   else
+  //     console.log(
+  //       `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
+  //         actions
+  //       ).join(", ")}`
+  //     );
+
+  //   await expect(page).toHaveURL(/linkedin\.com/);
+  // });
 });
