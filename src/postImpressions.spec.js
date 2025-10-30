@@ -179,6 +179,159 @@ async function viewOwnProfile(page) {
   }
 }
 
+
+/* ---------------------------
+   Post Impressions Action
+--------------------------- */
+async function checkPostImpressions(page) {
+  console.log("📊 Starting to check Post Impressions / Creator Analytics...");
+
+  // Ensure we are on Home feed
+  await page
+    .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
+    .catch(() => {});
+  await humanIdle(800, 1800);
+
+  const postImpressions = page
+    .locator(
+      `.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('Post impressions')`
+    )
+    .first();
+  if (await postImpressions.count()) {
+    await postImpressions.click().catch(() => {});
+  }
+  const viewAllAnalytics = page
+    .locator(`.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('View all analytics')`)
+    .first();
+  if (await viewAllAnalytics.count()) {
+    await viewAllAnalytics.click().catch(() => {});
+    await randomDelay(1500, 3500);
+    await page.locator(`.pcd-analytic-view-items-container [href*='https://www.linkedin.com/analytics/creator/content']`).first().click().catch(() => {});
+  }
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  console.log("Opened Post Impressions / Creator Analytics");
+  await humanIdle(1200, 2400);
+
+  const filterBtn = page.locator(
+    "div[class='artdeco-card'] .analytics-libra-analytics-filter-group"
+  );
+  await filterBtn
+    .first()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  const timeFilter = page.locator(
+    `label[for='timeRange-past_28_days'] p[class='display-flex']`
+  );
+  if (await timeFilter.count()) {
+    await timeFilter
+      .first()
+      .click()
+      .catch(() => {});
+    console.log("Set time filter to Past 28 days");
+    await humanIdle(2000, 4000);
+  }
+  const applyBtn = page.locator(
+    `div[id*='artdeco-hoverable-artdeco-gen'] div[class='artdeco-hoverable-content__content'] button[aria-label='This button will apply your selected item']`
+  );
+  if (await applyBtn.count()) {
+    await applyBtn
+      .first()
+      .click()
+      .catch(() => {});
+    console.log("Applied filter");
+    await humanIdle(2000, 4000);
+  }
+  const { impressions, membersReached } = await page.evaluate(() => {
+    const impressions = document
+      .querySelector(
+        ".member-analytics-addon-summary__list-item:nth-of-type(1) .text-body-medium-bold"
+      )
+      ?.innerText.trim();
+    const membersReached = document
+      .querySelector(
+        ".member-analytics-addon-summary__list-item:nth-of-type(2) .text-body-medium-bold"
+      )
+      ?.innerText.trim();
+    return { impressions, membersReached };
+  });
+  console.log("Impressions:", impressions);
+  console.log("Members reached:", membersReached);
+
+  // Final small wait to allow analytics screen to render
+  await humanIdle(2000, 4000);
+
+  await filterBtn
+    .last()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  await page
+    .locator(`label[for='metricType-ENGAGEMENTS']`)
+    .first()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  await page
+    .locator(
+      "div[id*='artdeco-hoverable-artdeco-gen'] button[aria-label='This button will apply your selected item']"
+    )
+    .nth(1)
+    .click()
+    .catch(() => {});
+  await humanIdle(1000, 3000);
+  // Wait for the analytics card container on the page to be fully visible and loaded
+  await page.waitForSelector(
+    "section.artdeco-card.member-analytics-addon-card__base-card",
+    { timeout: 15000 }
+  );
+
+  // Optional wait to ensure dynamic content loads fully
+  await page.waitForTimeout(3000);
+
+  const metrics = await page.evaluate(() => {
+    // Collect all metric list items
+    const items = Array.from(
+      document.querySelectorAll(".member-analytics-addon__cta-list-item")
+    );
+
+    // Helper function to get the count text by title matching (like 'Impressions', 'Reactions')
+    const getTextByTitle = (title) => {
+      const item = items.find(
+        (li) =>
+          li
+            .querySelector(".member-analytics-addon__cta-list-item-title")
+            ?.innerText.trim() === title
+      );
+      // Extract text inside the count container's text span
+      return item
+        ?.querySelector(
+          ".member-analytics-addon__cta-list-item-count-container .member-analytics-addon__cta-list-item-text"
+        )
+        ?.innerText.trim();
+    };
+
+    return {
+      reactions: getTextByTitle("Reactions"),
+      comments: getTextByTitle("Comments"),
+      reposts: getTextByTitle("Reposts"),
+      saves: getTextByTitle("Saves"),
+      sendsOnLinkedIn: getTextByTitle("Sends on LinkedIn"),
+    };
+  });
+
+  console.log(`Reactions: ${metrics.reactions}`);
+  console.log(`Comments: ${metrics.comments}`);
+  console.log(`Reposts: ${metrics.reposts}`);
+  console.log(`Saves: ${metrics.saves}`);
+  console.log(`Sends on LinkedIn: ${metrics.sendsOnLinkedIn}`);
+  await humanIdle(2000, 4000);
+
+  console.log("✅ Finished checking Post Impressions / Creator Analytics");
+}
+
+
+
 /* ---------------------------
    Main test
 --------------------------- */

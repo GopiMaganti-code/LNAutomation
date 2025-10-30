@@ -443,108 +443,221 @@ async function sendMessage(page, url) {
   }
 }
 
-/* --------------------------------
-   Check Connection Accepted Action
------------------------------------- */
 
+/* ---------------------------
+   Updated Helpers
+--------------------------- */
+async function detectProfileName(page, timeout = 5000) {
+  let profileName = "Unknown";
+  const nameSelectors = [
+    { selector: "h1", description: "h1 tag" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', description: "verified badge button p" },
+    { selector: ".text-heading-xlarge", description: "heading class fallback" }
+  ];
+  for (const { selector, description } of nameSelectors) {
+    try {
+      const nameText = await page.locator(selector).textContent({ timeout });
+      if (nameText && (profileName = nameText.trim()) !== "Unknown") {
+        console.log(`👤 Profile name found via ${description}: ${profileName} (raw: "${nameText.trim()}")`);
+        break;
+      }
+    } catch (err) {
+      if (!err.message.includes('Timeout')) {
+        console.log(`⚠️ Name selector failed ${description}: ${err.message}`);
+      }
+    }
+  }
+  console.log(`👤 Final profile name: ${profileName}`);
+  return profileName;
+}
+
+async function detectDegree(page, timeout = 5000) {
+  let degree = "unknown";
+  const degreeSelectors = [
+    { selector: 'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child', description: "degree last p" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] + p + p', description: "verified badge + p + p" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"]', description: "verified badge container" },
+    // Legacy fallbacks
+    { selector: ".distance-badge .visually-hidden", description: "degree badge hidden text" },
+    { selector: ".distance-badge .dist-value", description: "degree badge visible value" }
+  ];
+  for (const { selector, description } of degreeSelectors) {
+    try {
+      const connectionInfo = await page.locator(selector).textContent({ timeout });
+      if (connectionInfo) {
+        const lowerInfo = connectionInfo.toLowerCase().trim();
+        let matchedDegree = null;
+        if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
+          matchedDegree = "2nd";
+        } else if (lowerInfo.includes("· 3rd") || lowerInfo.includes("3rd")) {
+          matchedDegree = "3rd";
+        } else if (lowerInfo.includes("· 1st") || lowerInfo.includes("1st")) {
+          matchedDegree = "1st";
+        }
+        if (matchedDegree) {
+          degree = matchedDegree;  // Keep as "1st"/"2nd"/"3rd" (not full text)
+          console.log(`📊 Degree matched via ${description}: ${matchedDegree}`);
+          break;
+        }
+      }
+    } catch (err) {
+      if (!err.message.includes('Timeout')) {
+        console.log(`⚠️ Skipping ${description}: ${err.message}`);
+      }
+    }
+  }
+  console.log(`📊 Detected degree: ${degree}`);
+  return degree;
+}
+
+async function getVisibleLocator(page, selectors, useLast = false, timeout = 5000) {
+  for (const selector of selectors) {
+    try {
+      let safeSelector = selector;
+      if (!selector.includes(':has(')) {
+        safeSelector += useLast ? ':last-of-type' : ':first-of-type';
+      }
+      const loc = page.locator(safeSelector);
+      const singleLoc = useLast ? loc.nth(-1) : loc.nth(0);
+      if (await singleLoc.isVisible({ timeout })) {
+        console.log(`✅ Using selector: ${selector} (useLast: ${useLast})`);
+        return singleLoc;
+      }
+    } catch (err) {
+      console.log(`⚠️ Selector failed: ${selector} - ${err.message}`);
+    }
+  }
+  return null;
+}
+
+/* ---------------------------
+   Updated Function
+--------------------------- */
 async function checkConnectionAccepted(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await randomDelay(1000, 3000);
-    let profileName = "Unknown";
-    try {
-      profileName =
-        (await page
-          .locator("h1")
-          .textContent({ timeout: 5000 })
-          .then((text) => text.trim())) || "Unknown";
-    } catch (err) {
-      console.log(`⚠️ Profile name not found: ${err.message}`);
+
+    // Robust name detection
+    let profileName = await detectProfileName(page);
+    
+    // Updated degree detection
+    let degree = await detectDegree(page);
+    if (degree === "unknown") {
+      degree = "Unknown degree";
     }
-    let degree = "Unknown degree";
-    try {
-      degree =
-        (await page
-          .locator(".distance-badge .visually-hidden")
-          .textContent({ timeout: 5000 })
-          .then((text) => text.trim().toLowerCase())) ||
-        (await page
-          .locator(".distance-badge .dist-value")
-          .textContent({ timeout: 5000 })
-          .then((text) => text.trim().toLowerCase())) ||
-        "Unknown degree";
-    } catch (err) {
-      console.log(`⚠️ Degree not found: ${err.message}`);
-    }
+    
     let status = "Unknown";
+    // Debug log for degree check
+    console.log(`🔍 Degree check: "${degree}" (includes "1st"? ${degree.includes("1st")})`);
     if (degree.includes("1st")) {
       status = "Accepted";
       console.log(`✅ ${profileName}: ${degree} - ${status}`);
     } else {
-      const acceptButton = page.locator(".ph5 [aria-label*='Accept']").first();
-      const pendingButton = page
-        .locator(
-          ".ph5 button:has-text('Pending'), .ph5 button:has-text('Withdraw')"
-        )
-        .first();
-      const connectButton = page
-        .locator(".ph5 button:has-text('Connect')")
-        .first();
-      if (await acceptButton.isVisible({ timeout: 5000 })) {
-        status = "Accepted";
-        console.log(`✅ ${profileName}: ${degree} - ${status} (Accept button)`);
-      } else if (await pendingButton.isVisible({ timeout: 5000 })) {
+      // Accept button (incoming)
+      const acceptSelectors = [
+        ".ph5 [aria-label*='Accept']",
+        'button[aria-label^="Accept"][aria-label*="request to connect"]',
+        '[data-view-name="relationship-building-button"] button[aria-label*="Accept"]',
+        '[data-view-name="edge-creation-accept-action"] button'
+      ];
+      const acceptButton = await getVisibleLocator(page, acceptSelectors);
+
+      // Pending/withdraw (outgoing pending)
+      const pendingSelectors = [
+        ".ph5 button:has-text('Pending')",
+        ".ph5 button:has-text('Withdraw')",
+        '[aria-label*="Pending, click to withdraw invitation"]',
+        '[data-view-name="relationship-building-button"] button[aria-label*="Pending"]',
+        '[data-view-name="edge-creation-withdraw-action"] button'
+      ];
+      const pendingButton = await getVisibleLocator(page, pendingSelectors);
+
+      // Connect button (not sent)
+      const connectSelectors = [
+        ".ph5 button:has-text('Connect')",
+        'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
+        'div[data-view-name="edge-creation-connect-action"] a',
+        '[data-view-name="relationship-building-button"] a[aria-label^="Invite"][aria-label*="to connect"]',
+        '[data-view-name="edge-creation-connect-action"] a[aria-label^="Invite"][aria-label*="to connect"]',
+        '[data-view-name="relationship-building-button"] a:has(svg[id="connect-small"])',
+        '[data-view-name="profile-secondary-message"] ~ [data-view-name="relationship-building-button"] a:has-text("Connect")',
+        `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
+      ];
+      const connectButton = await getVisibleLocator(page, connectSelectors, true);
+
+      if (acceptButton) {
+        status = "Incoming Request (Accept Pending)";
+        console.log(`📥 ${profileName}: ${degree} - ${status} (Accept button)`);
+      } else if (pendingButton) {
         status = "Sent but Not Accepted (Pending)";
         console.log(`⏳ ${profileName}: ${degree} - ${status}`);
-      } else if (await connectButton.isVisible({ timeout: 5000 })) {
+      } else if (connectButton) {
         status = "Not Sent Yet";
-        console.log(
-          `⛔ ${profileName}: ${degree} - ${status} (Connect button)`
-        );
+        console.log(`⛔ ${profileName}: ${degree} - ${status} (Connect button)`);
       } else {
-        const moreButton = page
-          .locator(
-            ".ph5 button:has-text('More'), .ph5 [aria-label='More actions']"
-          )
-          .first();
-        if (await moreButton.isVisible({ timeout: 5000 })) {
-          await moreButton.click({ delay: 100 });
+        // More button
+        const moreSelectors = [
+          ".ph5 button:has-text('More')",
+          ".ph5 [aria-label='More actions']",
+          '[data-view-name="profile-overflow-button"]',
+          '[data-view-name="relationship-building-button"] ~ button[aria-label="More"]'
+        ];
+        const moreButton = await getVisibleLocator(page, moreSelectors);
+        
+        if (moreButton) {
+          console.log("🔽 Clicking moreButton...");
+          await moreButton.click({ delay: 100, timeout: 10000 });  // Explicit timeout to prevent hang
+          console.log("🔽 More dropdown opened");
           await randomDelay(1000, 2000);
-          const removeConnection = page
-            .locator(
-              ".artdeco-dropdown__content span:has-text('Remove Connection')"
-            )
-            .last();
-          const withdrawOption = page
-            .locator(".artdeco-dropdown__content span:has-text('Withdraw')")
-            .first();
-          if (await removeConnection.isVisible({ timeout: 5000 })) {
+          console.log("🔍 Looking for remove/withdraw options...");
+
+          // Remove connection (accepted)
+          const removeSelectors = [
+            ".artdeco-dropdown__content span:has-text('Remove this connection')",
+            ".artdeco-dropdown__content [aria-label*='Remove connection']",
+            ".artdeco-dropdown__content li:has-text('Remove')"
+          ];
+          const removeConnection = await getVisibleLocator(page, removeSelectors, true);
+
+          // Withdraw (pending)
+          const withdrawSelectors = [
+            ".artdeco-dropdown__content span:has-text('Withdraw invitation')",
+            ".artdeco-dropdown__content [aria-label*='Withdraw invitation']",
+            ".artdeco-dropdown__content li:has-text('Withdraw')"
+          ];
+          const withdrawOption = await getVisibleLocator(page, withdrawSelectors);
+
+          if (removeConnection) {
             status = "Accepted";
-            console.log(
-              `✅ ${profileName}: ${degree} - ${status} (Remove Connection)`
-            );
-          } else if (await withdrawOption.isVisible({ timeout: 5000 })) {
+            console.log(`✅ ${profileName}: ${degree} - ${status} (Remove Connection)`);
+          } else if (withdrawOption) {
             status = "Sent but Not Accepted (Withdraw)";
             console.log(`⏳ ${profileName}: ${degree} - ${status}`);
           } else {
             status = "Unknown";
             console.log(`❓ ${profileName}: ${degree} - ${status}`);
           }
-          await moreButton.click({ delay: 100 });
+
+          // Close dropdown
+          console.log("🔼 Closing more dropdown...");
+          await moreButton.click({ delay: 100, timeout: 5000 });
+          console.log("🔼 Dropdown closed");
         } else {
           status = "Unknown";
-          console.log(
-            `❓ ${profileName}: ${degree} - ${status} (No More button)`
-          );
+          console.log(`❓ ${profileName}: ${degree} - ${status} (No More button)`);
         }
       }
     }
-    console.log(`✅ Done with ${url}`);
+    console.log(`✅ Done with ${url} - Final Status: ${status}`);
   } catch (err) {
     console.error(`❌ Error checking status for ${url}: ${err.message}`);
+    console.log(`✅ Done with ${url} - Final Status: Error`);
   }
 }
+
+
 
 /* ---------------------------
     Check Reply Action
@@ -1163,67 +1276,216 @@ async function sendFollowAny(page, url) {
 /* ---------------------------
     Withdraw Request Action
 ------------------------------ */
-
 async function withdrawRequest(page, url) {
   console.log(`🌐 Visiting: ${url} to withdraw request`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await randomDelay(1000, 3000);
+
+    // Step 1️⃣ — Extract Profile Name (Robust locators)
     let profileName = "Unknown";
-    try {
-      profileName =
-        (await page
-          .locator("h1")
-          .textContent({ timeout: 5000 })
-          .then((text) => text.trim())) || "Unknown";
-    } catch (err) {
-      console.log(`⚠️ Profile name not found: ${err.message}`);
+    const nameLocators = [
+      "h1",
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+      "a[aria-label] h1",
+      'a[href*="/in/"] h1',
+      'div[data-view-name="profile-top-card-verified-badge"] p',
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
+    ];
+    for (const selector of nameLocators) {
+      try {
+        const text = await page.locator(selector).textContent({ timeout: 3000 });
+        if (text && text.trim()) {
+          profileName = text.trim();
+          console.log(`👤 Found profile name: "${profileName}" (via ${selector})`);
+          break;
+        }
+      } catch {
+        // silent fail, try next
+      }
     }
-    const headerWithdraw = page
-      .locator(
-        ".ph5 [aria-label*='Pending, click to withdraw invitation sent to']"
-      )
-      .first();
-    if (await headerWithdraw.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await headerWithdraw.click();
+
+    // Step 2️⃣ — Check Header Withdraw (Robust locators with .last())
+    const headerWithdrawLocators = [
+      {
+        selector: 'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] button[aria-label*="Pending, click to withdraw invitation"]',
+        description: "relationship-building edge-creation pending aria-label",
+      },
+      {
+        selector: 'div[data-view-name="edge-creation-connect-action"] button:has(svg[id="clock-small"])',
+        description: "edge-creation clock icon pending",
+      },
+      {
+        selector: ".ph5 button[aria-label*='Pending, click to withdraw invitation']",
+        description: "ph5 pending withdraw aria-label",
+      },
+      {
+        selector: 'div[data-view-name="relationship-building-button"] button:has(span:has-text("Pending"))',
+        description: "relationship-building pending text",
+      },
+      {
+        selector: "button[aria-label*='Pending invitation sent to']",
+        description: "global pending invitation aria-label",
+      },
+    ];
+
+    let headerWithdraw = null;
+    for (const { selector, description } of headerWithdrawLocators) {
+      try {
+        const btn = page.locator(selector).last();
+        await btn.waitFor({ state: "visible", timeout: 3000 });
+        headerWithdraw = btn;
+        console.log(`✅ Found header withdraw (${description})`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+
+    if (headerWithdraw) {
+      await humanMouse(page, 2);
+      await headerWithdraw.click({ delay: 100 });
+      console.log("💡 Header withdraw clicked");
       await randomDelay(1000, 2000);
     } else {
-      const moreButton = page
-        .locator(".ph5 [aria-label='More actions']")
-        .first();
-      if (await moreButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await moreButton.click();
+      // Step 3️⃣ — Fallback: More Actions Path (Robust locators with .last())
+      const moreButtonLocatorsTemp = [
+        {
+          selector: ".ph5 [aria-label='More actions']",
+          description: "more actions aria",
+        },
+        {
+          selector: 'button[data-view-name="profile-overflow-button"][aria-label="More"]',
+          description: "overflow more button",
+        },
+        {
+          selector: ".ph5.pb5 button:has-text('More')",
+          description: "more text button",
+        },
+      ];
+
+      let moreButton = null;
+      for (const { selector, description } of moreButtonLocatorsTemp) {
+        try {
+          const btn = page.locator(selector).last();
+          await btn.waitFor({ state: "visible", timeout: 3000 });
+          moreButton = btn;
+          console.log(`✅ Found more button (${description})`);
+          break;
+        } catch {
+          // try next
+        }
+      }
+
+      if (moreButton) {
+        await humanMouse(page, 2);
+        await moreButton.click({ delay: 100 });
+        console.log("💡 More button clicked");
         await randomDelay(1000, 2000);
-        const dropdownWithdraw = page
-          .locator(
-            ".ph5 .artdeco-dropdown__content [aria-label*='Pending, click to withdraw invitation sent to']"
-          )
-          .first();
-        if (
-          await dropdownWithdraw.isVisible({ timeout: 5000 }).catch(() => false)
-        ) {
-          await dropdownWithdraw.click();
+
+        // Step 4️⃣ — Locate Dropdown Withdraw (Robust array with .last())
+        const dropdownWithdrawLocators = [
+          {
+            selector: ".ph5 .artdeco-dropdown__content [aria-label*='Pending, click to withdraw invitation sent to']",
+            description: "dropdown pending withdraw aria-label",
+          },
+          {
+            selector: ".artdeco-dropdown__content [aria-label*='Pending invitation sent to']",
+            description: "dropdown pending invitation aria-label",
+          },
+          {
+            selector: ".artdeco-dropdown__content button:has(span:has-text('Pending'))",
+            description: "dropdown pending text button",
+          },
+          {
+            selector: ".artdeco-dropdown__content button:has(svg[id='clock-small'])",
+            description: "dropdown clock icon pending",
+          },
+        ];
+
+        let dropdownWithdraw = null;
+        for (const { selector, description } of dropdownWithdrawLocators) {
+          try {
+            const btn = page.locator(selector).last();
+            await btn.waitFor({ state: "visible", timeout: 3000 });
+            dropdownWithdraw = btn;
+            console.log(`✅ Found dropdown withdraw (${description})`);
+            break;
+          } catch {
+            // try next
+          }
+        }
+
+        if (dropdownWithdraw) {
+          await humanMouse(page, 1);
+          await dropdownWithdraw.click({ delay: 100 });
+          console.log("💡 Dropdown withdraw clicked");
           await randomDelay(1000, 2000);
         } else {
-          console.log(`⚠️ No pending/withdraw option found for ${profileName}`);
+          console.log(`⚠️ No pending/withdraw option found in dropdown for ${profileName}`);
+          // Close dropdown
+          await moreButton.click({ delay: 100 });
           return;
         }
+
+        // Close dropdown after click
+        await moreButton.click({ delay: 100 });
+        await randomDelay(500, 1000);
       } else {
         console.log(`⚠️ No More actions button found for ${profileName}`);
         return;
       }
     }
-    const withdrawButton = page
-      .locator("div[role='alertdialog'] button:has-text('Withdraw')")
-      .first();
-    if (await withdrawButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await withdrawButton.click();
+
+    // Step 5️⃣ — Confirm Withdraw in Dialog (Robust locators with .first())
+    const withdrawButtonLocators = [
+      {
+        selector: `div[role='alertdialog'] button:has-text('Withdraw')`,
+        description: "dialog withdraw text",
+      },
+      {
+        selector: "dialog button[aria-label*='Withdrawn invitation sent to']",
+        description: "dialog withdrawn aria-label",
+      },
+      {
+        selector: 'div[data-view-name="edge-creation-connect-action"] button:has-text("Withdraw")',
+        description: "edge-creation withdraw text",
+      },
+      {
+        selector: '[data-testid="dialog"] button:has-text("Withdraw")',
+        description: "data-testid dialog withdraw text",
+      },
+      {
+        selector: 'dialog button:has-text("Withdraw")',
+        description: "dialog withdraw text",
+      },
+      
+    ];
+
+    let withdrawButton = null;
+    for (const { selector, description } of withdrawButtonLocators) {
+      try {
+        const btn = page.locator(selector).first();
+        await btn.waitFor({ state: "visible", timeout: 5000 });
+        withdrawButton = btn;
+        console.log(`✅ Found withdraw confirm button (${description})`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+
+    if (withdrawButton) {
+      await humanMouse(page, 1);
+      await withdrawButton.click({ delay: 100 });
       console.log(`✅ Withdrawn request for ${profileName}`);
     } else {
-      console.log(`⚠️ Withdraw button not found for ${profileName}`);
+      console.log(`⚠️ Withdraw confirm button not found for ${profileName}`);
     }
+
     await randomDelay(1000, 2000);
     console.log(`✅ Done with ${url}`);
+    console.log(`----------------------------`);
   } catch (err) {
     console.error(`❌ Error withdrawing request for ${url}: ${err.message}`);
   }
@@ -1297,7 +1559,6 @@ async function checkPremiumStatus(page) {
 /* ---------------------------
    Send Message Function (No Degree Check)
 --------------------------- */
-
 async function sendMessageToProfile(page, url) {
   console.log(`💬 Processing profile for messaging: ${url}`);
 
@@ -1467,38 +1728,6 @@ async function sendMessageToProfile(page, url) {
   }
 }
 
-/* ---------------------------
-   Helper Functions (Latest Versions - Duplicates Removed)
---------------------------- */
-async function getVisibleLocator(
-  page,
-  selectors,
-  useLast = false,
-  timeout = 5000
-) {
-  for (const selector of selectors) {
-    try {
-      // Build safe selector with scoping if needed
-      let safeSelector = selector;
-      // Append pseudo-selector for single match if not using :has (which chains poorly)
-      if (selector.includes(":has(")) {
-        // For :has, we'll use .nth after locator
-      } else {
-        safeSelector += useLast ? ":last-of-type" : ":first-of-type";
-      }
-      const loc = page.locator(safeSelector);
-      // Chain .nth for explicit single selection (0 = first, -1 = last)
-      const singleLoc = useLast ? loc.nth(-1) : loc.nth(0);
-      if (await singleLoc.isVisible({ timeout })) {
-        console.log(`✅ Using selector: ${selector} (useLast: ${useLast})`);
-        return singleLoc;
-      }
-    } catch (err) {
-      console.log(`⚠️ Selector failed: ${selector} - ${err.message}`);
-    }
-  }
-  return null;
-}
 
 /* ---------------------------
     Text Extraction Helper
@@ -1521,65 +1750,6 @@ async function getTextFromSelectors(page, selectors, timeout = 5000) {
   return null;
 }
 
-/* ---------------------------
-    Degree Detection Helper
---------------------------- */
-
-async function detectDegree(page, timeout = 5000) {
-  let degree = "unknown";
-  const degreeSelectors = [
-    // New selectors first for faster, reliable detection
-    {
-      selector:
-        'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child',
-      description: "degree last p",
-    },
-    {
-      selector: 'div[data-view-name="profile-top-card-verified-badge"] + p',
-      description: "verified badge + p + p",
-    },
-    {
-      selector: 'div[data-view-name="profile-top-card-verified-badge"]',
-      description: "verified badge container",
-    },
-    // Legacy fallbacks (will timeout silently if irrelevant)
-    {
-      selector: ".distance-badge .visually-hidden",
-      description: "degree badge hidden text",
-    },
-    {
-      selector: ".distance-badge .dist-value",
-      description: "degree badge visible value",
-    },
-  ];
-  for (const { selector, description } of degreeSelectors) {
-    try {
-      const connectionInfo = await page
-        .locator(selector)
-        .textContent({ timeout });
-      if (connectionInfo) {
-        const lowerInfo = connectionInfo.toLowerCase().trim();
-        // Improved matching: Look for "· 1st/2nd/3rd" pattern common in LinkedIn
-        if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
-          degree = "2nd";
-          break;
-        } else if (lowerInfo.includes("· 3rd") || lowerInfo.includes("3rd")) {
-          degree = "3rd";
-          break;
-        } else if (lowerInfo.includes("· 1st") || lowerInfo.includes("1st")) {
-          degree = "1st";
-          break;
-        }
-      }
-    } catch (err) {
-      if (!err.message.includes("Timeout")) {
-        console.log(`⚠️ Skipping ${description}: ${err.message}`);
-      }
-    }
-  }
-  console.log(`📊 Detected degree: ${degree}`);
-  return degree;
-}
 
 /* ---------------------------
     Send Connection Request Action
@@ -1634,6 +1804,7 @@ async function sendConnectionRequest(page, url) {
       // Scoped alternatives with .last() for multi-matches
       'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
       'div[data-view-name="edge-creation-connect-action"] a',
+      `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
     ];
     const connectButton = await getVisibleLocator(page, connectSelectors, true); // Use .last() for alternatives
     const moreSelectors = [
@@ -1916,6 +2087,722 @@ async function navigateToOwnProfileAndCheckStatus(page) {
     );
   }
 }
+/* ---------------------------
+    Like Random Post from User's Activity
+--------------------------- */
+
+
+async function likeRandomUserPost(page, url) {
+  console.log(`🌐 Visiting: ${url} to like a random post`);
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await randomDelay(2000, 4000);
+    await humanScroll(page, 2); // Gentle scroll to reveal activity section
+
+    // Find and click "Show all" link in Activity section
+    const showAllSelectors = [
+      'a[aria-label="Show all"]',
+      'a:has-text("Show all")',
+      '.ph5 a[href*="/recent-activity/all/"]',
+      `a[href*="/recent-activity/all/"]:has(span:has-text("Show all"))`,
+      `a[href*="/recent-activity/all/"]:has-text("See all activity")`,
+      `a[aria-label='Show all']`,
+    ];
+    const showAllLink = await getVisibleLocator(page, showAllSelectors, false, 10000);
+    if (!showAllLink) {
+      console.log(`⚠️ "Show all" link not found for ${url}, skipping`);
+      return;
+    }
+
+    console.log(`🔍 Found "Show all" - clicking to view activity...`);
+    await humanMouse(page, 2);
+    await showAllLink.click({ delay: 100 });
+    
+    // Wait for navigation to activity page
+    await page.waitForURL(/\/recent-activity\/all\/$/, { timeout: 10000 }).catch(() => console.log(`⚠️ Activity URL not reached, proceeding...`));
+    await randomDelay(6000, 8000); // Increased wait for activity page load to ensure DOM stability
+
+    // Wait for post containers to load (key fix for async loading)
+    const postSelectors = [
+      '.feed-shared-update-v2',
+      '.occludable-update',
+      '[data-urn*="urn:li:activity:"]',
+      '.update-components-actor',
+      '.feed-shared-actor'
+    ];
+    let postLoaded = false;
+    // for (const selector of postSelectors) {
+    //   try {
+    //     await page.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+    //     console.log(`✅ Post container loaded using selector: ${selector}`);
+    //     postLoaded = true;
+    //     break;
+    //   } catch (err) {
+    //     console.log(`⚠️ Post selector ${selector} timed out`);
+    //   }
+    // }
+    if (!postLoaded) {
+      console.log(`⚠️ No post containers loaded for ${url}, likely empty activity`);
+    }
+
+    // Single gentle scroll to trigger any lazy loading without retry loop
+    await humanScroll(page, 3);
+    await humanIdle(3000, 5000); // Additional idle for rendering
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => console.log(`⚠️ Network idle not reached, proceeding...`));
+
+    // Improved empty activity state check: Require specific text for confirmation
+    const emptyStateSelectors = [
+      { selector: 'div[data-test-id="empty-state"]', textCheck: 'No recent activity' },
+      { selector: '.scaffold-layout__empty-state', textCheck: 'No recent activity' },
+      { selector: 'p:has-text("No recent activity")', textCheck: 'No recent activity' },
+      { selector: '[data-test-id="no-activity"]', textCheck: 'no activity' },
+      { selector: 'div:contains("No activity")', textCheck: 'No activity' },
+      { selector: '.artdeco-empty-state', textCheck: 'No recent activity' }
+    ];
+    let isEmpty = false;
+    for (const { selector, textCheck } of emptyStateSelectors) {
+      try {
+        const emptyEl = page.locator(selector);
+        if (await emptyEl.isVisible({ timeout: 5000 })) {
+          const elText = await emptyEl.textContent({ timeout: 5000 }) || '';
+          if (elText.toLowerCase().includes(textCheck.toLowerCase())) {
+            console.log(`⚠️ Confirmed empty activity state detected for ${url} using selector: ${selector} (text: "${elText.trim()}"), skipping`);
+            isEmpty = true;
+            break;
+          } else {
+            console.log(`ℹ️ Empty state element found (${selector}) but text mismatch (expected: "${textCheck}", got: "${elText.trim()}"), continuing`);
+          }
+        }
+      } catch (err) {
+        // Timeout is fine, continue
+      }
+    }
+    if (isEmpty) {
+      return;
+    }
+
+    // Single check for like buttons after enhanced load (no retry loop)
+    const likeSelector = 'button[aria-label*="Like"]';
+    const potentialButtons = await page.locator(likeSelector).all();
+    console.log(`🔍 Searched selector "${likeSelector}": found ${potentialButtons.length} potential buttons`);
+
+    // Enhanced filtering with detailed debug logs
+    const visibleUnliked = [];
+    let visibleCount = 0;
+    let unlikedCount = 0;
+    let pressedCount = 0;
+    for (const btn of potentialButtons) {
+      try {
+        if (await btn.isVisible({ timeout: 3000 })) { // Increased timeout for visibility
+          visibleCount++;
+          console.log(`   - Button ${visibleCount} is visible`);
+          const ariaLabel = await btn.getAttribute('aria-label') || '';
+          console.log(`     Aria-label: "${ariaLabel}"`);
+          if (ariaLabel.toLowerCase().includes('like') && !ariaLabel.toLowerCase().includes('unlike')) {
+            unlikedCount++;
+            console.log(`       - Passes label filter (unliked)`);
+            // Additional check for pressed state
+            const pressed = await btn.getAttribute('aria-pressed');
+            console.log(`       - Aria-pressed: "${pressed}"`);
+            const isActive = await btn.evaluate(el => el.classList && el.classList.contains('react-button__trigger--active'));
+            console.log(`       - Is active class: ${isActive}`);
+            if (pressed !== 'true' && !isActive) {
+              visibleUnliked.push(btn);
+              console.log(`         ✅ Fully unliked and ready`);
+            } else {
+              pressedCount++;
+              console.log(`         ❌ Excluded: pressed=${pressed} or active=${isActive}`);
+            }
+          } else {
+            console.log(`     ❌ Excluded: contains "unlike" or no "like"`);
+          }
+        } else {
+          console.log(`   - Button skipped: not visible`);
+        }
+      } catch (err) {
+        console.log(`⚠️ Visibility/attribute check failed for button: ${err.message}`);
+      }
+    }
+    console.log(`📊 Filter summary: ${potentialButtons.length} total -> ${visibleCount} visible -> ${unlikedCount} unliked by label -> ${visibleUnliked.length} fully unliked (excluded ${pressedCount} pressed/active)`);
+
+    if (visibleUnliked.length === 0) {
+      console.log(`⚠️ No unliked like buttons found for ${url}, skipping`);
+      // Optional: Log total liked buttons for debug
+      const likedSelector = 'button[aria-label*="Unlike"]';
+      const likedCount = await page.locator(likedSelector).count();
+      console.log(`ℹ️ Debug: Found ${likedCount} already liked ("Unlike") buttons`);
+      return;
+    }
+
+    // Click the first unliked button (no random selection)
+    const button = visibleUnliked[0];
+    console.log(`🎯 Selected first like button of ${visibleUnliked.length} to click`);
+
+    // Human-like interaction
+    await humanMouse(page, 2);
+    await button.scrollIntoViewIfNeeded();
+    await randomDelay(800, 1500);
+    await button.click({ delay: 100 });
+    console.log(`👍 Liked first post on ${url}`);
+    await humanIdle(2000, 4000);
+
+    console.log(`✅ Finished liking post on ${url}`);
+    console.log("-------------------------------");
+  } catch (err) {
+    console.error(`❌ Error liking post on ${url}: ${err.message}`);
+  }
+}
+
+
+/* ---------------------------
+   Fixed Action Function: Withdraw All Follows
+   - Removed inner-loop refresh to prevent index shifting/skipping
+   - Added visibility check before each click to handle stale locators
+   - Added reverse processing option comment if needed for large lists
+--------------------------- */
+async function withdrawAllFollows(page) {
+  console.log("🚫 Starting to withdraw all follow requests...");
+  try {
+    await page.goto("https://www.linkedin.com/mynetwork/network-manager/people-follow/following/", { waitUntil: "domcontentloaded", timeout: 60000 });
+    console.log("✅ Navigated to Following page");
+    await randomDelay(2000, 4000);
+
+    // Scroll to load more followers if needed (infinite scroll handling)
+    let previousHeight = 0;
+    let loadAttempts = 0;
+    const maxLoadAttempts = 10;
+    while (loadAttempts < maxLoadAttempts) {
+      await humanScroll(page, 2);  // Gentle scroll down
+      await randomDelay(1000, 2000);
+      const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+      if (currentHeight === previousHeight) {
+        console.log("📜 No more content to load");
+        break;
+      }
+      previousHeight = currentHeight;
+      loadAttempts++;
+      console.log(`📜 Loaded more content (attempt ${loadAttempts}/${maxLoadAttempts})`);
+    }
+
+    // Find all unfollow buttons (initial query)
+    const unfollowSelectors = [
+      'button[aria-label*="Click to stop following"]',
+      'button[aria-label*="Unfollow"]'
+    ];
+    let unfollowButtons = [];
+    for (const selector of unfollowSelectors) {
+      try {
+        unfollowButtons = await page.locator(selector).all();
+        if (unfollowButtons.length > 0) {
+          console.log(`✅ Found ${unfollowButtons.length} unfollow buttons using: ${selector}`);
+          break;
+        }
+      } catch (err) {
+        console.log(`⚠️ Unfollow selector failed: ${selector} - ${err.message}`);
+      }
+    }
+
+    if (unfollowButtons.length === 0) {
+      console.log("⚠️ No unfollow buttons found on the page");
+      return;
+    }
+
+    console.log(`🔄 Unfollowing ${unfollowButtons.length} people one by one...`);
+    // Process in original order; no inner refresh to avoid index shifts
+    // Alternative: Reverse loop if list re-renders shift indices: for (let i = unfollowButtons.length - 1; i >= 0; i--)
+    for (let i = 0; i < unfollowButtons.length; i++) {
+      const button = unfollowButtons[i];
+      try {
+        // Check if still visible (handles stale or removed)
+        if (!(await button.isVisible({ timeout: 3000 }))) {
+          console.log(`⚠️ Button ${i + 1} no longer visible (skipped)`);
+          continue;
+        }
+        await button.scrollIntoViewIfNeeded();
+        await humanMouse(page, 1);
+        await button.click({ delay: 100 });
+        console.log(`💥 Unfollow initiated for person ${i + 1}/${unfollowButtons.length}`);
+
+        // Wait for and confirm modal
+        const confirmSelectors = [
+          '[data-test-modal] button[data-test-dialog-primary-btn]',
+          'div[role="dialog"] button:has-text("Unfollow")',
+          'button[data-test-dialog-primary-btn]:has-text("Unfollow")'
+        ];
+        let confirmButton = null;
+        for (const sel of confirmSelectors) {
+          try {
+            confirmButton = page.locator(sel).first();
+            if (await confirmButton.isVisible({ timeout: 5000 })) {
+              console.log(`✅ Using confirm selector: ${sel}`);
+              break;
+            }
+          } catch (err) {
+            // Silently skip timeout
+          }
+        }
+        if (confirmButton) {
+          await humanMouse(page, 1);
+          await confirmButton.click({ delay: 100 });
+          console.log(`✅ Confirmed unfollow for person ${i + 1}`);
+        } else {
+          console.log(`⚠️ Confirm button not found for person ${i + 1}, skipping confirmation`);
+        }
+
+        // Random delay between actions to mimic human behavior
+        const delay = Math.floor(Math.random() * 3000) + 2000;  // 2-5 seconds
+        console.log(`⏸️ Waiting ${Math.round(delay / 1000)} seconds before next...`);
+        await page.waitForTimeout(delay);
+
+        // NO REFRESH HERE: Prevents index shifting that causes skips (e.g., clicking 1,3,5,7 instead of 1-8)
+        // If list grows/shrinks unexpectedly, the visibility check above handles skips safely
+      } catch (err) {
+        console.log(`⚠️ Failed to unfollow person ${i + 1}: ${err.message}`);
+        await randomDelay(1000, 2000);
+      }
+    }
+
+    console.log("✅ Finished withdrawing all follows");
+    await humanIdle(3000, 6000);
+  } catch (err) {
+    console.error("❌ Failed to withdraw follows:", err.message);
+  }
+}
+
+
+
+/* ---------------------------
+   New Action Function: Withdraw All Sent Connection Requests
+   - Navigates to Sent Invitations manager
+   - Loads all via scroll/"Load more"
+   - Withdraws one by one with modal confirmation
+   - Handles stale elements with visibility checks (no inner refresh)
+--------------------------- */
+async function withdrawAllSentRequests(page) {
+  console.log("🚫 Starting to withdraw all sent connection requests...");
+  try {
+    await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/sent/", { waitUntil: "domcontentloaded", timeout: 60000 });
+    console.log("✅ Navigated to Sent Invitations page");
+    await randomDelay(2000, 4000);
+
+    // Ensure "Sent" tab is active
+    const sentTabSelectors = [
+      'button[aria-current="true"]:has-text("Sent")',
+      'button:has-text("Sent")'
+    ];
+    const sentTab = await getVisibleLocator(page, sentTabSelectors);
+    if (sentTab && !(await sentTab.getAttribute('aria-current') === 'true')) {
+      await sentTab.click({ delay: 100 });
+      await randomDelay(1000, 2000);
+    }
+
+    // Scroll to load more invitations if needed (infinite scroll + "Load more")
+    let previousHeight = 0;
+    let loadAttempts = 0;
+    const maxLoadAttempts = 15;  // Increased for potentially more invites
+    while (loadAttempts < maxLoadAttempts) {
+      // Check and click "Load more" if visible
+      const loadMoreButton = page.locator('button:has-text("Load more")').first();
+      if (await loadMoreButton.isVisible({ timeout: 3000 })) {
+        await loadMoreButton.click({ delay: 100 });
+        console.log("📜 Clicked 'Load more'");
+        await randomDelay(2000, 4000);
+      }
+      await humanScroll(page, 2);  // Gentle scroll down
+      await randomDelay(1000, 2000);
+      const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+      if (currentHeight === previousHeight) {
+        console.log("📜 No more content to load");
+        break;
+      }
+      previousHeight = currentHeight;
+      loadAttempts++;
+      console.log(`📜 Loaded more content (attempt ${loadAttempts}/${maxLoadAttempts})`);
+    }
+
+    // Find all withdraw buttons
+    const withdrawSelectors = [
+      'button[data-view-name="sent-invitations-withdraw-single"]:has-text("Withdraw")',
+      'button:has-text("Withdraw")'
+    ];
+    let withdrawButtons = [];
+    for (const selector of withdrawSelectors) {
+      try {
+        withdrawButtons = await page.locator(selector).all();
+        if (withdrawButtons.length > 0) {
+          console.log(`✅ Found ${withdrawButtons.length} withdraw buttons using: ${selector}`);
+          break;
+        }
+      } catch (err) {
+        console.log(`⚠️ Withdraw selector failed: ${selector} - ${err.message}`);
+      }
+    }
+
+    if (withdrawButtons.length === 0) {
+      console.log("⚠️ No withdraw buttons found on the page");
+      return;
+    }
+
+    console.log(`🔄 Withdrawing ${withdrawButtons.length} requests one by one...`);
+    // Process in original order; no inner refresh to avoid index shifts
+    // Alternative: Reverse loop if list re-renders shift indices: for (let i = withdrawButtons.length - 1; i >= 0; i--)
+    for (let i = 0; i < withdrawButtons.length; i++) {
+      const button = withdrawButtons[i];
+      try {
+        // Check if still visible (handles stale or removed)
+        if (!(await button.isVisible({ timeout: 3000 }))) {
+          console.log(`⚠️ Button ${i + 1} no longer visible (skipped)`);
+          continue;
+        }
+        await button.scrollIntoViewIfNeeded();
+        await humanMouse(page, 1);
+        await button.click({ delay: 100 });
+        console.log(`💥 Withdraw initiated for request ${i + 1}/${withdrawButtons.length}`);
+
+        // Wait for and confirm modal
+        const confirmSelectors = [
+          'button[aria-label^="Withdrawn invitation sent to"]',
+          'button:has-text("Withdraw")',
+          'div[role="dialog"] button:not([aria-label*="Cancel"]):has-text("Withdraw")'
+        ];
+        let confirmButton = null;
+        for (const sel of confirmSelectors) {
+          try {
+            confirmButton = page.locator(sel).first();
+            if (await confirmButton.isVisible({ timeout: 5000 })) {
+              console.log(`✅ Using confirm selector: ${sel}`);
+              break;
+            }
+          } catch (err) {
+            // Silently skip timeout
+          }
+        }
+        if (confirmButton) {
+          await humanMouse(page, 1);
+          await confirmButton.click({ delay: 100 });
+          console.log(`✅ Confirmed withdraw for request ${i + 1}`);
+          await randomDelay(1000, 2000);  // Brief pause after confirm
+        } else {
+          console.log(`⚠️ Confirm button not found for request ${i + 1}, skipping confirmation`);
+        }
+
+        // Random delay between actions to mimic human behavior
+        const delay = Math.floor(Math.random() * 4000) + 3000;  // 3-7 seconds (longer for invites)
+        console.log(`⏸️ Waiting ${Math.round(delay / 1000)} seconds before next...`);
+        await page.waitForTimeout(delay);
+
+        // NO REFRESH HERE: Prevents index shifting that causes skips
+        // Visibility check above handles any stale elements safely
+      } catch (err) {
+        console.log(`⚠️ Failed to withdraw request ${i + 1}: ${err.message}`);
+        await randomDelay(1000, 2000);
+      }
+    }
+
+    console.log("✅ Finished withdrawing all sent requests");
+    await humanIdle(4000, 8000);
+  } catch (err) {
+    console.error("❌ Failed to withdraw sent requests:", err.message);
+  }
+}
+
+/* ---------------------------
+   Post Impressions Action
+--------------------------- */
+async function checkPostImpressions(page) {
+  console.log("📊 Starting to check Post Impressions / Creator Analytics...");
+
+  // Ensure we are on Home feed
+  await page
+    .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
+    .catch(() => {});
+  await humanIdle(800, 1800);
+
+  const postImpressions = page
+    .locator(
+      `.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('Post impressions')`
+    )
+    .first();
+  if (await postImpressions.count()) {
+    await postImpressions.click().catch(() => {});
+  }
+  const viewAllAnalytics = page
+    .locator(`.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('View all analytics')`)
+    .first();
+  if (await viewAllAnalytics.count()) {
+    await viewAllAnalytics.click().catch(() => {});
+    await randomDelay(1500, 3500);
+    await page.locator(`.pcd-analytic-view-items-container [href*='https://www.linkedin.com/analytics/creator/content']`).first().click().catch(() => {});
+  }
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  console.log("Opened Post Impressions / Creator Analytics");
+  await humanIdle(1200, 2400);
+
+  const filterBtn = page.locator(
+    "div[class='artdeco-card'] .analytics-libra-analytics-filter-group"
+  );
+  await filterBtn
+    .first()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  const timeFilter = page.locator(
+    `label[for='timeRange-past_28_days'] p[class='display-flex']`
+  );
+  if (await timeFilter.count()) {
+    await timeFilter
+      .first()
+      .click()
+      .catch(() => {});
+    console.log("Set time filter to Past 28 days");
+    await humanIdle(2000, 4000);
+  }
+  const applyBtn = page.locator(
+    `div[id*='artdeco-hoverable-artdeco-gen'] div[class='artdeco-hoverable-content__content'] button[aria-label='This button will apply your selected item']`
+  );
+  if (await applyBtn.count()) {
+    await applyBtn
+      .first()
+      .click()
+      .catch(() => {});
+    console.log("Applied filter");
+    await humanIdle(2000, 4000);
+  }
+  const { impressions, membersReached } = await page.evaluate(() => {
+    const impressions = document
+      .querySelector(
+        ".member-analytics-addon-summary__list-item:nth-of-type(1) .text-body-medium-bold"
+      )
+      ?.innerText.trim();
+    const membersReached = document
+      .querySelector(
+        ".member-analytics-addon-summary__list-item:nth-of-type(2) .text-body-medium-bold"
+      )
+      ?.innerText.trim();
+    return { impressions, membersReached };
+  });
+  console.log("Impressions:", impressions);
+  console.log("Members reached:", membersReached);
+
+  // Final small wait to allow analytics screen to render
+  await humanIdle(2000, 4000);
+
+  await filterBtn
+    .last()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  await page
+    .locator(`label[for='metricType-ENGAGEMENTS']`)
+    .first()
+    .click()
+    .catch(() => {});
+  await humanIdle(800, 1600);
+  await page
+    .locator(
+      "div[id*='artdeco-hoverable-artdeco-gen'] button[aria-label='This button will apply your selected item']"
+    )
+    .nth(1)
+    .click()
+    .catch(() => {});
+  await humanIdle(1000, 3000);
+  // Wait for the analytics card container on the page to be fully visible and loaded
+  await page.waitForSelector(
+    "section.artdeco-card.member-analytics-addon-card__base-card",
+    { timeout: 15000 }
+  );
+
+  // Optional wait to ensure dynamic content loads fully
+  await page.waitForTimeout(3000);
+
+  const metrics = await page.evaluate(() => {
+    // Collect all metric list items
+    const items = Array.from(
+      document.querySelectorAll(".member-analytics-addon__cta-list-item")
+    );
+
+    // Helper function to get the count text by title matching (like 'Impressions', 'Reactions')
+    const getTextByTitle = (title) => {
+      const item = items.find(
+        (li) =>
+          li
+            .querySelector(".member-analytics-addon__cta-list-item-title")
+            ?.innerText.trim() === title
+      );
+      // Extract text inside the count container's text span
+      return item
+        ?.querySelector(
+          ".member-analytics-addon__cta-list-item-count-container .member-analytics-addon__cta-list-item-text"
+        )
+        ?.innerText.trim();
+    };
+
+    return {
+      reactions: getTextByTitle("Reactions"),
+      comments: getTextByTitle("Comments"),
+      reposts: getTextByTitle("Reposts"),
+      saves: getTextByTitle("Saves"),
+      sendsOnLinkedIn: getTextByTitle("Sends on LinkedIn"),
+    };
+  });
+
+  console.log(`Reactions: ${metrics.reactions}`);
+  console.log(`Comments: ${metrics.comments}`);
+  console.log(`Reposts: ${metrics.reposts}`);
+  console.log(`Saves: ${metrics.saves}`);
+  console.log(`Sends on LinkedIn: ${metrics.sendsOnLinkedIn}`);
+  await humanIdle(2000, 4000);
+
+  console.log("✅ Finished checking Post Impressions / Creator Analytics");
+}
+
+
+/* ---------------------------
+   Scrape Connections Action
+--------------------------- */
+async function scrapeConnections(page) {
+  console.log("🔎 Scraping first 20 connections...");
+
+  // Ensure we are on Home feed first
+  await page
+    .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
+    .catch(() => {});
+  await humanIdle(2000, 4000);
+
+  console.log("Navigating to My Network -> Connections...");
+  const myNetwork = `nav li [href*='https://www.linkedin.com/mynetwork']`;
+  await page
+    .locator(myNetwork)
+    .click()
+    .catch(() => {});
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await humanIdle(3000, 6000);
+  // Click on Connections link
+  await page.locator(`nav ul [aria-label*='connections']`).first().click();
+  await humanIdle(2000, 4000);
+
+  // Wait for connections to load
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await randomDelay(4000, 6000);
+
+  // Wait for connections list to load
+  await page.waitForSelector('a[data-view-name="connections-profile"]', {
+    timeout: 10000,
+  });
+
+  // Grab all connections first
+  const allConnections = await page.$$eval(
+    'a[data-view-name="connections-profile"]',
+    (els) =>
+      els
+        .map((el) => {
+          const nameEl = el.querySelector("p a");
+          const name = nameEl ? nameEl.innerText.trim() : null;
+          const url = el.href;
+          return { name, url };
+        })
+        .filter((c) => c.name && c.url)
+  );
+
+  // Take only first 20
+  const first20Connections = allConnections.slice(0, 20);
+
+  // Print first 20 connections
+  first20Connections.forEach(({ name, url }, idx) => {
+    console.log(`${idx + 1}. ${name} : ${url}`);
+    console.log("-------------------------------");
+  });
+
+  // Print total connections scraped
+  console.log(`\n✅ Total connections scraped: ${allConnections.length}`);
+
+  return first20Connections; // Optional: return the data for further use
+}
+
+
+
+// Selectors for Profile Image from First HTML Snippet
+// (Targets the img inside .profile-photo-edit__preview or .pv-top-card__edit-photo)
+const firstImageSelectors = [
+  'img.profile-photo-edit__preview',
+  '.pv-top-card__edit-photo img',
+  '.profile-photo-edit.pv-top-card__edit-photo img'
+];
+
+// Selectors for Profile Image from Second HTML Snippet
+// (Targets the img inside [data-view-name="profile-top-card-member-photo"] or figure[data-view-name="image"])
+const secondImageSelectors = [
+  '[data-view-name="profile-top-card-member-photo"] img',
+  'figure[data-view-name="image"] img',
+  'img[data-loaded="true"]'
+];
+
+// Combined Robust Selector for Profile Image (works for both structures)
+const combinedProfileImageSelector = [
+  'img.profile-photo-edit__preview',
+  '.pv-top-card__edit-photo img',
+  '.profile-photo-edit.pv-top-card__edit-photo img',
+  '[data-view-name="profile-top-card-member-photo"] img',
+  'figure[data-view-name="image"] img',
+  'img[data-loaded="true"]'
+].join(', ');
+
+// Usage Example in grabProfileImage Function
+async function grabProfileImage(page) {
+  console.log("👤 Grabbing profile image...");
+
+  // Ensure we are on Home feed
+  await page
+    .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60000 })
+    .catch(() => {});
+  await humanIdle(2000, 4000);
+
+  // Click on profile image to open menu
+  await page.locator(`img.global-nav__me-photo, img[alt*="Profile photo"], figure[data-view-name="image"] img`).first().click().catch(() => {});
+
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await humanIdle(2000, 4000);
+  
+  // Click "View profile" to navigate to own profile
+  await page.locator(`a:has-text('View profile'), a[href*='/in/']`).first().click().catch(() => {});
+  
+  await page.waitForLoadState("domcontentloaded").catch(() => {});
+  await humanIdle(2000, 4000);
+
+  // Updated robust selectors for name using provided locators
+  const nameLocators = [
+    { selector: "h1", description: "h1 tag" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', description: "verified badge button p" },
+    { selector: "a[aria-label] h1", description: "aria-label a h1" },
+    { selector: 'a[href*="/in/"] h1', description: "in href a h1" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] p', description: "verified badge p" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type', description: "verified badge first p" },
+  ];
+
+  let nameText = await getTextFromSelectors(page, nameLocators.map(loc => loc.selector), 10000);
+  if (!nameText) {
+    console.log("⚠️ No name found with provided locators");
+    nameText = "Unknown";
+  } else {
+    console.log("Profile Name:", nameText);
+  }
+
+  // Updated robust selector for profile image using combined selectors
+  const profileImage = page.locator(combinedProfileImageSelector).first();
+  await profileImage.waitFor({ state: "visible", timeout: 20000 }).catch(() => console.log("⚠️ Profile image not found or timed out"));
+  
+  let imageUrl = await profileImage.getAttribute("src");
+  if (!imageUrl) {
+    console.log("⚠️ No image URL found with src attribute");
+    imageUrl = null;
+  } else {
+    console.log("Profile Image URL:", imageUrl);
+  }
+
+  return { name: nameText, imageUrl }; // Optional: return the data for further use
+};
+
+
 
 
 
@@ -2018,51 +2905,65 @@ test.describe("LinkedIn Multi-Action Script", () => {
   );
   console.log("-------------------------------");
 
-  const actions = {
-    view_feed: viewFeed,
-    like_feed: likeFeed,
-    check_degree: async () => {
-      for (const url of PROFILE_URLS) await checkDegree(page, url);
-    },
-    send_message: async () => {
-      for (const url of PROFILE_URLS) await sendMessage(page, url);
-    },
-    send_connection_request: async () => {
-      for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
-    },
-    check_connection_accepted: async () => {
-      for (const url of PROFILE_URLS)
-        await checkConnectionAccepted(page, url);
-    },
-    check_reply: async () => {
-      for (const url of PROFILE_URLS) await checkReply(page, url);
-    },
-    send_follow: async () => {
-      for (const url of PROFILE_URLS) await sendFollow(page, url);
-    },
-    send_follow_any: async () => {
-      for (const url of PROFILE_URLS) await sendFollowAny(page, url);
-    },
-    withdraw_request: async () => {for (const url of PROFILE_URLS) await withdrawRequest(page, url);},
-    check_own_verification: navigateToOwnProfileAndCheckStatus,
-    send_message_premium: async () => {
-      const isPremiumUser = await checkPremiumStatus(page);
-      if (isPremiumUser && PROFILE_URLS.length > 0) {
-        console.log(
-          `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
-        );
-        for (const url of PROFILE_URLS) {
-          await sendMessageToProfile(page, url);
-          await humanIdle(3000, 6000); // Pause between profiles
-        }
-      } else if (!isPremiumUser) {
-        console.log("⛔ Not a premium user. Skipping message sending.");
-      } else {
-        console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
-      }
-    },
-  };
 
+  const actions = {
+  view_feed: viewFeed,
+  like_feed: likeFeed,
+  check_degree: async () => {
+    for (const url of PROFILE_URLS) await checkDegree(page, url);
+  },
+  send_message: async () => {
+    for (const url of PROFILE_URLS) await sendMessage(page, url);
+  },
+  send_connection_request: async () => {
+    for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
+  },
+  check_connection_accepted: async () => {
+    for (const url of PROFILE_URLS)
+      await checkConnectionAccepted(page, url);
+  },
+  check_reply: async () => {
+    for (const url of PROFILE_URLS) await checkReply(page, url);
+  },
+  send_follow: async () => {
+    for (const url of PROFILE_URLS) await sendFollow(page, url);
+  },
+  send_follow_any: async () => {
+    for (const url of PROFILE_URLS) await sendFollowAny(page, url);
+  },
+  withdraw_request: async () => {
+    for (const url of PROFILE_URLS) await withdrawRequest(page, url);
+  },
+  check_own_verification: navigateToOwnProfileAndCheckStatus,
+  send_message_premium: async () => {
+    const isPremiumUser = await checkPremiumStatus(page);
+    if (isPremiumUser && PROFILE_URLS.length > 0) {
+      console.log(
+        `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
+      );
+      for (const url of PROFILE_URLS) {
+        await sendMessageToProfile(page, url);
+        await humanIdle(3000, 6000); // Pause between profiles
+      }
+    } else if (!isPremiumUser) {
+      console.log("⛔ Not a premium user. Skipping message sending.");
+    } else {
+      console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
+    }
+  },
+  like_user_post: async () => {
+    console.log(`👍 Liking random posts on ${PROFILE_URLS.length} user profiles...`);
+    for (const url of PROFILE_URLS) {
+      await likeRandomUserPost(page, url);
+      await humanIdle(5000, 10000); // Longer pause between profiles to avoid rate limits
+    }
+  },
+  withdraw_all_follows: withdrawAllFollows, // New action
+  withdraw_all_sent_requests: withdrawAllSentRequests, // New bulk withdraw action
+  check_post_impressions: checkPostImpressions,
+  scrape_connections: scrapeConnections,
+  grab_profile_image: grabProfileImage,
+};
   const actionFunc = actions[ACTION];
   if (actionFunc) await actionFunc(page);
   else
