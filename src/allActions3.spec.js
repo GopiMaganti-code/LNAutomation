@@ -662,7 +662,6 @@ async function checkConnectionAccepted(page, url) {
 /* ---------------------------
     Check Reply Action
 --------------------------- */
-
 async function checkReply(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
@@ -772,10 +771,175 @@ async function checkReply(page, url) {
   }
 }
 
+
+//---------------------------
+//   Grab Replies Action
+//---------------------------
+async function grabReplies(page, url) {
+  console.log(`🌐 Visiting: ${url}`);
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await randomDelay(4000, 6000); // Increased delay for page stability
+    // Close any lingering message overlays
+    const closeButton = page.locator("button:has-text('Close your conversation')").first();
+    const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
+    if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await closeButton.click();
+      console.log("🗑️ Closed existing conversation overlay");
+    } else if (await altClose.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await altClose.click();
+      console.log("🗑️ Closed via alt close");
+    }
+
+    // Dynamic profile name extraction (fallbacks for varying structures)
+    let profileName = "Unknown";
+    const nameLocators = [
+      "h1", // Primary: Profile header
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', // Verified badge variant
+      "a[aria-label] h1", // Aria-linked header
+      'a[href*="/in/"] h1', // LinkedIn URL header
+      'div[data-view-name="profile-top-card-verified-badge"] p', // Fallback p in badge
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type', // First p variant
+    ];
+    for (const selector of nameLocators) {
+      try {
+        const text = await page.locator(selector).textContent({ timeout: 3000 });
+        if (text && text.trim().length > 0) {
+          profileName = text.trim();
+          console.log(`👤 Found profile name: "${profileName}" (via ${selector})`);
+          break;
+        }
+      } catch (err) {
+        // Silent fail on timeout/non-critical errors; try next selector
+        if (!err.message.includes("Timeout")) console.log(`⚠️ Name selector failed: ${selector} - ${err.message}`);
+      }
+    }
+
+    let replyStatus = "No Messages Found";
+    // Enhanced message button selectors (prioritize visibility with fallbacks)
+    const messageButtonLocators = [
+      { selector: "div.ph5 button:has-text('Message')", description: "header message button" },
+      { selector: 'a[data-view-name="profile-primary-message"]', description: "primary message link" },
+      { selector: 'a[data-view-name="profile-secondary-message"]', description: "secondary message link" },
+      { selector: 'button[aria-label*="Message"]', description: "aria message button" }, // New: Aria fallback
+    ];
+    let messageButton = null;
+    for (const { selector, description } of messageButtonLocators) {
+      try {
+        const btn = page.locator(selector).last(); // Use .last() for multi-matches in feed-like views
+        await btn.waitFor({ state: "visible", timeout: 5000 }); // Slightly longer for stability
+        messageButton = btn;
+        console.log(`✅ Found message button (${description})`);
+        break;
+      } catch (err) {
+        // Silent fail; try next
+        if (!err.message.includes("Timeout")) console.log(`⚠️ Message button selector failed: ${description} - ${err.message}`);
+      }
+    }
+
+    if (messageButton) {
+      console.log(`💬 Opening conversation for ${profileName}`);
+      await humanMouse(page, 2); // Human-like hover before click
+      await messageButton.click({ delay: 100 });
+      await randomDelay(5000, 8000); // Extended wait for full message list load (dynamic content)
+
+      // Grab FULL conversation: Target all event list items (both own and other)
+      // Use li.msg-s-message-list__event for containers, then .msg-s-event-listitem inside
+      const eventContainers = await page.locator('ul.msg-s-message-list-content > li.msg-s-message-list__event').all();
+      const timeHeadings = await page.locator('.msg-s-message-list__time-heading').all(); // Global headings for grouping
+
+      if (eventContainers.length > 0) {
+        replyStatus = "Conversation Retrieved";
+        console.log(`Sender: ${profileName}`);
+        console.log(`  - Status: ${replyStatus} (${eventContainers.length} total messages)`);
+        console.log("📜 Full Conversation Log:");
+
+        let currentDateHeading = "Unknown Date"; // Default; update dynamically
+        let headingIndex = 0;
+        let lastTimestamp = null; // Track last known timestamp for carry-forward
+
+        for (let i = 0; i < eventContainers.length; i++) {
+          const eventContainer = eventContainers[i];
+          const msgElement = eventContainer.locator('.msg-s-event-listitem').first();
+
+          // Dynamic date: Check for time-heading within this event container or advance global
+          let localHeading = await eventContainer.locator('.msg-s-message-list__time-heading').textContent({ timeout: 2000 }).catch(() => "");
+          if (localHeading.trim()) {
+            currentDateHeading = localHeading.trim();
+          } else if (headingIndex < timeHeadings.length) {
+            // Fallback to global headings (approximate)
+            const globalHeading = await timeHeadings[headingIndex].textContent({ timeout: 2000 }).catch(() => "");
+            if (globalHeading.trim()) {
+              currentDateHeading = globalHeading.trim();
+              headingIndex++;
+            }
+          }
+
+          // Sender detection: Use class check for --other (from profileName) vs own ("Vamsi Reddy")
+          const isOther = await msgElement.evaluate(el => el.classList.contains('msg-s-event-listitem--other'));
+          let senderName = isOther ? profileName : "Vamsi Reddy";
+
+          // Timestamp: From .msg-s-message-group__timestamp (own may lack, fallback)
+          let timestamp = await msgElement.locator('.msg-s-message-group__timestamp').textContent({ timeout: 3000 }).catch(() => "Unknown Time");
+          timestamp = timestamp ? timestamp.trim().replace(/\s+/g, " ") : "Unknown Time";
+          // Carry forward: If unknown, use last known timestamp
+          if (timestamp === "Unknown Time" && lastTimestamp) {
+            timestamp = lastTimestamp;
+          }
+          // Update last known timestamp if this one is valid
+          if (timestamp !== "Unknown Time") {
+            lastTimestamp = timestamp;
+          }
+
+          // Message body: Use .msg-s-event-listitem__body with textContent (matches working logic)
+          let messageText = await msgElement.locator('.msg-s-event-listitem__body').textContent({ timeout: 5000 }).catch(() => "");
+          messageText = messageText.replace(/<!---->/g, "").trim();
+          if (!messageText || messageText.length === 0) {
+            messageText = "No readable content";
+          }
+
+          // Seen receipts: Check for presence and title
+          let seenInfo = "";
+          const seenCount = await msgElement.locator('.msg-s-event-listitem__seen-receipts img').count();
+          if (seenCount > 0) {
+            const seenTitle = await msgElement.locator('.msg-s-event-listitem__seen-receipts img').getAttribute('title', { timeout: 2000 }).catch(() => "");
+            seenInfo = seenTitle ? ` (Seen: ${seenTitle})` : " (Seen)";
+          }
+
+          console.log(
+            `  - Msg ${i + 1}/${eventContainers.length}: From "${senderName}" on ${currentDateHeading} at ${timestamp}${seenInfo} - "${messageText}"`
+          );
+
+          await randomDelay(200, 500); // Micro-pause for readability in logs
+        }
+      } else {
+        console.log(`Sender: ${profileName}`);
+        console.log(`  - Status: ${replyStatus} (Empty conversation)`);
+      }
+
+      // Graceful close
+      const finalCloseButton = page.locator("button:has-text('Close your conversation')").first();
+      const finalAltClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
+      if (await finalCloseButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await finalCloseButton.click();
+      } else if (await finalAltClose.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await finalAltClose.click();
+      }
+      await randomDelay(1000, 2000);
+    } else {
+      console.log(`⚠️ Message button not found for ${profileName} (skipping conversation)`);
+      console.log(`Sender: ${profileName}`);
+      console.log(`  - Status: No Reply Received (No Message Button)`);
+    }
+    console.log(`✅ Done with ${url} (${replyStatus})`);
+  } catch (err) {
+    console.error(`❌ Error checking messages for ${url}: ${err.message}`);
+  }
+}
+
 /* ---------------------------
    Send Follow Action
 --------------------------- */
-
 async function sendFollow(page, url) {
   console.log(`🌐 Visiting: ${url} to follow 3rd degree connection`);
   try {
@@ -2255,10 +2419,7 @@ async function likeRandomUserPost(page, url) {
 
 
 /* ---------------------------
-   Fixed Action Function: Withdraw All Follows
-   - Removed inner-loop refresh to prevent index shifting/skipping
-   - Added visibility check before each click to handle stale locators
-   - Added reverse processing option comment if needed for large lists
+    Withdraw All Follows
 --------------------------- */
 async function withdrawAllFollows(page) {
   console.log("🚫 Starting to withdraw all follow requests...");
@@ -2372,11 +2533,7 @@ async function withdrawAllFollows(page) {
 
 
 /* ---------------------------
-   New Action Function: Withdraw All Sent Connection Requests
-   - Navigates to Sent Invitations manager
-   - Loads all via scroll/"Load more"
-   - Withdraws one by one with modal confirmation
-   - Handles stale elements with visibility checks (no inner refresh)
+   Withdraw All Sent Connection Requests
 --------------------------- */
 async function withdrawAllSentRequests(page) {
   console.log("🚫 Starting to withdraw all sent connection requests...");
@@ -2803,9 +2960,6 @@ async function grabProfileImage(page) {
 };
 
 
-
-
-
 /* ---------------------------
    Main Test - Perform Action
 ------------------------------ */
@@ -2925,6 +3079,9 @@ test.describe("LinkedIn Multi-Action Script", () => {
   check_reply: async () => {
     for (const url of PROFILE_URLS) await checkReply(page, url);
   },
+  grab_replies: async () => {
+    for (const url of PROFILE_URLS) await grabReplies(page, url);
+  },
   send_follow: async () => {
     for (const url of PROFILE_URLS) await sendFollow(page, url);
   },
@@ -2976,64 +3133,4 @@ test.describe("LinkedIn Multi-Action Script", () => {
   await expect(page).toHaveURL(/linkedin\.com/);
 });
 
-  // test("Perform Action", async () => {
-  //   test.setTimeout(20 * 60 * 1000); // 20 minutes
-  //   console.log(
-  //     `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
-  //   );
-  //   console.log("-------------------------------");
-
-  //   const actions = {
-  //     view_feed: viewFeed,
-  //     like_feed: likeFeed,
-  //     check_degree: async () => {
-  //       for (const url of PROFILE_URLS) await checkDegree(page, url);
-  //     },
-  //     send_message: async () => {
-  //       for (const url of PROFILE_URLS) await sendMessage(page, url);
-  //     },
-  //     send_connection_request: async () => {
-  //       for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
-  //     },
-  //     check_connection_accepted: async () => {
-  //       for (const url of PROFILE_URLS)
-  //         await checkConnectionAccepted(page, url);
-  //     },
-  //     check_reply: async () => {
-  //       for (const url of PROFILE_URLS) await checkReply(page, url);
-  //     },
-  //     send_follow: async () => {
-  //       for (const url of PROFILE_URLS) await sendFollow(page, url);
-  //     },
-  //     withdraw_request: async () => {for (const url of PROFILE_URLS) await withdrawRequest(page, url);},
-  //     check_own_verification: navigateToOwnProfileAndCheckStatus,
-  //     send_message_premium: async () => {
-  //       const isPremiumUser = await checkPremiumStatus(page);
-  //       if (isPremiumUser && PROFILE_URLS.length > 0) {
-  //         console.log(
-  //           `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
-  //         );
-  //         for (const url of PROFILE_URLS) {
-  //           await sendMessageToProfile(page, url);
-  //           await humanIdle(3000, 6000); // Pause between profiles
-  //         }
-  //       } else if (!isPremiumUser) {
-  //         console.log("⛔ Not a premium user. Skipping message sending.");
-  //       } else {
-  //         console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
-  //       }
-  //     },
-  //   };
-
-  //   const actionFunc = actions[ACTION];
-  //   if (actionFunc) await actionFunc(page);
-  //   else
-  //     console.log(
-  //       `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
-  //         actions
-  //       ).join(", ")}`
-  //     );
-
-  //   await expect(page).toHaveURL(/linkedin\.com/);
-  // });
 });
