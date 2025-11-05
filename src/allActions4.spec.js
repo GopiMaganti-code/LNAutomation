@@ -2,7 +2,6 @@ require("dotenv").config();
 const { test, expect, chromium } = require("@playwright/test");
 const speakeasy = require("speakeasy");
 const fs = require("fs");
-
 // Configuration
 const STORAGE_FILE =
   process.env.STORAGE_FILE || "linkedinStealth-state-Praneeth.json";
@@ -12,36 +11,123 @@ const PROFILE_URLS = (process.env.PROFILE_URLS || "")
   .map((url) => url.replace(/"/g, "").trim())
   .filter((url) => url);
 const ACTION = process.env.ACTION || "view_feed"; // Default action
-
 /* ---------------------------
-    Human-like Interaction Helpers
+    Human-like Interaction Helpers (Enhanced with Guide Principles)
 --------------------------- */
-async function randomDelay(min = 200, max = 1200) {
-  const t = Math.floor(Math.random() * (max - min + 1)) + min;
-  await new Promise((r) => setTimeout(r, t));
+
+// Simple Gaussian approximation using Box-Muller transform
+function gaussianSample(mean, sd) {
+  const u = 1 - Math.random();
+  const v = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return mean + z * sd;
 }
 
-/* ---------------------------
-   Updated humanType to handle both string selectors and Locator objects
---------------------------- */
-async function humanType(page, selectorOrLocator, text) {
-  let el;
-  if (typeof selectorOrLocator === 'string') {
-    el = page.locator(selectorOrLocator);
-  } else {
-    el = selectorOrLocator; // Assume it's a Locator
+function truncatedNormal(mean, sd, min, max) {
+  let x;
+  do {
+    x = gaussianSample(mean, sd);
+  } while (x < min || x > max);
+  return x;
+}
+
+// Mixed distribution delay (70% Gaussian, 20% Uniform, 10% Exponential + jitter)
+function humanDelay(actionType = 'general', extraJitterMs = 0) {
+  let mean, sd, min, max, uniformMin, uniformMax, expScale;
+  switch (actionType) {
+    case 'connection_request':
+      mean = 270000; // 4.5 min in ms
+      sd = 120000; // 2 min
+      min = 60000; // 1 min
+      max = 720000; // 12 min
+      uniformMin = 120000; uniformMax = 600000;
+      expScale = 600000;
+      break;
+    case 'message_after_connect':
+      mean = 1800000; // 30 min
+      sd = 3600000; // Vary up to hours
+      min = 1800000; max = 28800000; // 30min - 8h
+      uniformMin = 1800000; uniformMax = 10800000; // 30min-3h for uniform
+      expScale = 7200000; // 2h scale
+      break;
+    case 'profile_view':
+      mean = 45000; // 45s
+      sd = 30000; // 30s
+      min = 10000; max = 300000; // 10s - 5min
+      uniformMin = 10000; uniformMax = 90000;
+      expScale = 180000;
+      break;
+    case 'withdraw':
+      mean = 750000; // ~12.5 min, but guide 5-20 min
+      sd = 450000;
+      min = 300000; max = 1200000;
+      uniformMin = 300000; uniformMax = 1200000;
+      expScale = 900000;
+      break;
+    case 'general': // Default for scrolls, idles, etc.
+    default:
+      mean = 2000;
+      sd = 1000;
+      min = 500; max = 6000;
+      uniformMin = 500; uniformMax = 5000;
+      expScale = 3000;
+      break;
   }
+  const r = Math.random();
+  let secs;
+  if (r < 0.70) {
+    secs = truncatedNormal(mean / 1000, sd / 1000, min / 1000, max / 1000) * 1000;
+  } else if (r < 0.90) {
+    secs = (Math.random() * ((uniformMax - uniformMin) / 1000) + (uniformMin / 1000)) * 1000;
+  } else {
+    secs = (-Math.log(Math.random()) * expScale + uniformMin) * 1000; // Exponential + min
+  }
+  // Add uniform jitter
+  secs += (Math.random() - 0.5) * extraJitterMs * 2; // ± jitter
+  // Clamp
+  secs = Math.max(min, Math.min(secs, max));
+  return new Promise((r) => setTimeout(r, Math.floor(secs)));
+}
+
+// Enhanced humanType with per-char delay, editing pauses, backspaces
+async function humanType(page, locator, text) {
+  const el = page.locator(locator);
   await el.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
   try {
     await el.click({ delay: 100 });
-  } catch (e) {}
-  for (const ch of text) {
-    const delay = Math.floor(Math.random() * 150) + 50;
-    await el.type(ch, { delay });
-    if (Math.random() < 0.12) {
-      await randomDelay(300, 800);
+  } catch {}
+  let typed = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    // Per-char delay: normal(0.24s, 0.08s) clamped 0.05-0.7s
+    const perCharDelay = Math.max(50, Math.min(700, gaussianSample(240, 80)));
+    await el.type(ch, { delay: perCharDelay });
+    typed += ch;
+
+    // Occasional editing pause (5-15% chance)
+    if (Math.random() < 0.1) { // ~10% avg
+      const editPause = Math.random() * 2500 + 500; // 0.5-3s
+      await page.waitForTimeout(editPause);
+    }
+
+    // Occasional backspace (1-3% per char, but overall 15-25% messages)
+    if (Math.random() < 0.02 && i > 0 && typed.length > 1) { // Low per-char, accumulates
+      await page.waitForTimeout(Math.random() * 170 + 80); // 80-250ms before backspace
+      await el.press('Backspace');
+      typed = typed.slice(0, -1);
+      console.log(`🔧 Simulated backspace edit at char ${i}`);
+    }
+
+    // Occasional longer think pause (1-3% of chars)
+    if (Math.random() < 0.02) {
+      const thinkPause = Math.random() * 7000 + 5000; // 5-12s
+      await page.waitForTimeout(thinkPause);
     }
   }
+  // Review pause before send: 20-60s
+  const reviewDelay = Math.random() * 40000 + 20000;
+  await page.waitForTimeout(reviewDelay);
+  console.log(`👀 Simulated review pause: ${Math.round(reviewDelay / 1000)}s`);
 }
 
 async function humanMouse(page, moves = 5) {
@@ -50,7 +136,7 @@ async function humanMouse(page, moves = 5) {
     const x = Math.floor(Math.random() * size.width);
     const y = Math.floor(Math.random() * size.height);
     await page.mouse.move(x, y, { steps: Math.floor(Math.random() * 12) + 3 });
-    await randomDelay(200, 600);
+    await humanDelay('general', 400); // Jittered short delay
   }
 }
 
@@ -58,19 +144,17 @@ async function humanScroll(page, steps = 3) {
   for (let i = 0; i < steps; i++) {
     const dir = Math.random() > 0.2 ? 1 : -1;
     await page.mouse.wheel(0, dir * (Math.floor(Math.random() * 300) + 150));
-    await randomDelay(800, 1600);
+    await humanDelay('general', 1200); // Enhanced with mixed dist
   }
 }
 
 async function humanIdle(min = 2000, max = 6000) {
-  const wait = Math.floor(Math.random() * (max - min + 1)) + min;
-  await new Promise((r) => setTimeout(r, wait));
+  await humanDelay('general'); // Uses general dist, overrides min/max if needed
 }
 
 /* ---------------------------
-    Close All Message Boxes Helper
+    Close All Message Boxes Helper (Enhanced)
 --------------------------- */
-
 async function closeAllMessageBoxes(page) {
   console.log("🗑️ Closing all open message boxes...");
   const closeButtons = page
@@ -89,7 +173,7 @@ async function closeAllMessageBoxes(page) {
       await humanMouse(page, 1);
       await button.click({ delay: 100 });
       console.log("✅ Closed a message box");
-      await randomDelay(500, 1000);
+      await humanDelay('general'); // Jittered delay between closes
     } catch (err) {
       console.log("⚠️ Failed to close a message box:", err.message);
     }
@@ -97,49 +181,352 @@ async function closeAllMessageBoxes(page) {
 }
 
 /* ---------------------------
-   Stealth patches
+   Stealth patches (Unchanged)
 --------------------------- */
 async function addStealth(page) {
   await page.addInitScript(() => {
     try {
+      // Core automation traces (original + enhanced)
       Object.defineProperty(navigator, "webdriver", { get: () => false });
-      window.chrome = { runtime: {} };
-      Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3] });
+      Object.defineProperty(navigator, "webdriver", { configurable: false }); // Prevent override detection
+      window.chrome = { runtime: {} }; // Fake Chrome extension support
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [
+          { name: "Chrome PDF Plugin" }, { name: "Chrome PDF Viewer" }, { name: "Native Client" }
+        ], // More realistic array
+      });
       Object.defineProperty(navigator, "languages", {
-        get: () => ["en-US", "en"],
+        get: () => ["en-US", "en"], // Original
+      });
+      Object.defineProperty(navigator, "language", {
+        get: () => "en-US",
       });
 
-      const toDataURL = HTMLCanvasElement.prototype.toDataURL;
-      HTMLCanvasElement.prototype.toDataURL = function () {
-        const ctx = this.getContext("2d");
-        ctx.fillStyle = "rgba(255,0,0,0.01)";
-        ctx.fillRect(0, 0, 1, 1);
-        return toDataURL.apply(this, arguments);
+      // Screen/Viewport spoof (fake common resolutions)
+      const fakeScreen = {
+        width: 1920 + Math.floor(Math.random() * 200) - 100, // 1820-2020
+        height: 1080 + Math.floor(Math.random() * 100) - 50, // 1030-1130
+        availWidth: 1920,
+        availHeight: 1040,
+        colorDepth: 24,
+        pixelDepth: 24,
+      };
+      Object.defineProperty(screen, "width", { get: () => fakeScreen.width });
+      Object.defineProperty(screen, "height", { get: () => fakeScreen.height });
+      Object.defineProperty(screen, "availWidth", { get: () => fakeScreen.availWidth });
+      Object.defineProperty(screen, "availHeight", { get: () => fakeScreen.availHeight });
+      Object.defineProperty(screen, "colorDepth", { get: () => fakeScreen.colorDepth });
+      Object.defineProperty(screen, "pixelDepth", { get: () => fakeScreen.pixelDepth });
+
+      // Hardware spoof (fake mid-range device)
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        get: () => 8 + Math.floor(Math.random() * 4), // 8-11 cores
+      });
+      Object.defineProperty(navigator, "deviceMemory", {
+        get: () => 8 + Math.floor(Math.random() * 8), // 8-15 GB
+      });
+
+      // Timezone/Intl spoof (fake common US/Asia)
+      const fakeTimezone = Math.floor(Math.random() * 3) === 0 ? "America/New_York" : "Asia/Kolkata"; // 1/3 US, else IST
+      const originalResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+      Intl.DateTimeFormat.prototype.resolvedOptions = function() {
+        const options = originalResolvedOptions.call(this);
+        options.timeZone = fakeTimezone;
+        return options;
       };
 
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function (param) {
-        if (param === 37445) return "Intel Inc.";
-        if (param === 37446) return "Intel Iris OpenGL Engine";
-        return getParameter.apply(this, arguments);
+      // Fonts partial spoof (inject CSS to fake measurement; can't fully hide but adds noise)
+      const style = document.createElement('style');
+      style.textContent = `
+        @font-face { font-family: 'FakeFont'; src: url('data:font/woff;base64,...') format('woff'); } /* Placeholder; use real base64 for noise */
+        * { font-family: system-ui, -apple-system, sans-serif !important; } /* Normalize to common stack */
+      `;
+      document.head.appendChild(style);
+
+      // Canvas noise (enhanced: random per call, subtle gradients)
+      const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+      HTMLCanvasElement.prototype.toDataURL = function(...args) {
+        if (this.width > 0 && this.height > 0) {
+          const ctx = this.getContext("2d");
+          // Random noise pixels (0.01-0.05 opacity)
+          const noise = Math.random() * 0.04 + 0.01;
+          ctx.fillStyle = `rgba(${Math.random()*255},${Math.random()*255},${Math.random()*255},${noise})`;
+          ctx.fillRect(0, 0, 1 + Math.random(), 1 + Math.random()); // Varied size
+          // Subtle gradient for realism
+          const grad = ctx.createLinearGradient(0, 0, 1, 1);
+          grad.addColorStop(0, `rgba(0,0,0,${noise/2})`);
+          grad.addColorStop(1, `rgba(255,255,255,${noise/2})`);
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, this.width, this.height);
+        }
+        return originalToDataURL.apply(this, args);
+      };
+      const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+      HTMLCanvasElement.prototype.toBlob = function(callback, ...args) {
+        const dataURL = this.toDataURL(); // Trigger noise
+        const binStr = atob(dataURL.split(',')[1]);
+        const len = binStr.length;
+        const arr = new Uint8Array(len);
+        for (let i = 0; i < len; i++) arr[i] = binStr.charCodeAt(i);
+        callback(new Blob([arr], { type: 'image/png' }), ...args);
       };
 
-      const oldGetChannelData = AudioBuffer.prototype.getChannelData;
-      AudioBuffer.prototype.getChannelData = function () {
-        const data = oldGetChannelData.apply(this, arguments);
-        const rnd = Math.random() * 0.0000001;
-        return data.map((v) => v + rnd);
+      // WebGL noise (enhanced: vary vendor per context, add extensions)
+      const originalGetParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(param) {
+        if (param === 37445) return ["Intel Inc.", "NVIDIA Corporation", "Apple GPU"][Math.floor(Math.random() * 3)]; // Rotate vendors
+        if (param === 37446) {
+          const engines = ["Intel Iris OpenGL Engine", "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)", "Apple GLSL"];
+          return engines[Math.floor(Math.random() * engines.length)];
+        }
+        if (param === 7936) return "WebGL 1.0"; // Vendor-specific
+        if (param === 7937) return "WebGL GLSL ES 1.0"; // Renderer-specific
+        return originalGetParameter.call(this, param);
       };
-    } catch (e) {}
+      // Fake extensions
+      const originalGetSupportedExtensions = WebGLRenderingContext.prototype.getSupportedExtensions;
+      WebGLRenderingContext.prototype.getSupportedExtensions = function() {
+        const exts = originalGetSupportedExtensions.call(this) || [];
+        // Add/remove randomly for noise
+        const fakeExts = ["WEBGL_debug_renderer_info", "OES_texture_float", "EXT_frag_depth"];
+        if (Math.random() > 0.5) exts.push(...fakeExts.slice(0, Math.floor(Math.random() * 2)));
+        return exts;
+      };
+
+      // Audio noise (enhanced: vary noise per buffer, add oscillator quirks)
+      const originalGetChannelData = AudioBuffer.prototype.getChannelData;
+      AudioBuffer.prototype.getChannelData = function(channel) {
+        const data = originalGetChannelData.call(this, channel);
+        const noiseLevel = Math.random() * 0.0001 + 0.00005; // Subtle variation
+        return data.map((v, i) => {
+          // Add phase-based noise (mimic hardware)
+          const phase = i / data.length * Math.PI * 2;
+          return v + noiseLevel * Math.sin(phase) * (Math.random() - 0.5);
+        });
+      };
+      // Fake AudioContext state
+      const originalCreateOscillator = AudioContext.prototype.createOscillator;
+      AudioContext.prototype.createOscillator = function() {
+        const osc = originalCreateOscillator.call(this);
+        // Add micro-delay simulation
+        osc.start = function(when = 0) {
+          setTimeout(() => originalCreateOscillator.call(this).start(when), Math.random() * 2); // 0-2ms jitter
+        };
+        return osc;
+      };
+
+      // Media Devices spoof (fake 1 cam + 1 mic)
+      const originalEnumerateDevices = navigator.mediaDevices.enumerateDevices;
+      navigator.mediaDevices.enumerateDevices = async () => {
+        const devices = await originalEnumerateDevices.call(navigator.mediaDevices);
+        // Filter real, add fakes
+        return devices.filter(d => d.kind === 'audioinput' || d.kind === 'videoinput').slice(0, 2).concat([
+          { deviceId: 'fake-cam', kind: 'videoinput', label: 'Fake Webcam' },
+          { deviceId: 'fake-mic', kind: 'audioinput', label: 'Fake Microphone' }
+        ]);
+      };
+      Object.defineProperty(navigator, "permissions", {
+        get: () => ({
+          query: (perm) => Promise.resolve({ state: perm.name.includes('camera') || perm.name.includes('microphone') ? 'denied' : 'granted' }), // Privacy-focused user
+        }),
+      });
+
+      // Speech Voices spoof (fake 2-3 common voices)
+      const originalGetVoices = window.speechSynthesis.getVoices;
+      window.speechSynthesis.getVoices = function() {
+        return [
+          { name: 'Google US English', lang: 'en-US', localService: false },
+          { name: 'Microsoft David Desktop - English (United States)', lang: 'en-US', localService: true },
+          Math.random() > 0.5 ? { name: 'Fake Voice', lang: 'en-IN', localService: false } : null,
+        ].filter(Boolean);
+      };
+      // Trigger load
+      speechSynthesis.getVoices();
+
+      // Battery spoof (fake 80-100% charging)
+      if ('getBattery' in navigator) {
+        const originalGetBattery = navigator.getBattery;
+        navigator.getBattery = () => Promise.resolve({
+          charging: true,
+          chargingTime: 0,
+          dischargingTime: Infinity,
+          level: 0.8 + Math.random() * 0.2, // 80-100%
+          addEventListener: () => {}, // Stub events
+        });
+      }
+
+      // Permissions/Geolocation spoof (deny or fake)
+      if (navigator.geolocation) {
+        const originalGetCurrentPosition = navigator.geolocation.getCurrentPosition;
+        navigator.geolocation.getCurrentPosition = (success, error) => {
+          setTimeout(() => {
+            if (Math.random() > 0.7) { // 30% grant fake coords
+              success({ coords: { latitude: 37.7749 + (Math.random()-0.5)*0.1, longitude: -122.4194 + (Math.random()-0.5)*0.1 } });
+            } else {
+              error({ code: 1, message: 'User denied Geolocation' }); // Common denial
+            }
+          }, Math.random() * 500 + 100); // Human-like delay
+        };
+      }
+
+      // Performance noise (add micro-delays to timings)
+      const originalNow = performance.now;
+      let lastTime = Date.now();
+      performance.now = function() {
+        const real = originalNow.call(this);
+        const jitter = (Math.random() - 0.5) * 0.1; // ±0.05ms
+        lastTime += jitter;
+        return Math.max(real, lastTime);
+      };
+
+      // DNT spoof (via header override simulation; real via context)
+      Object.defineProperty(navigator, 'doNotTrack', {
+        get: () => Math.random() > 0.5 ? '1' : null, // 50% enabled
+      });
+
+      // Eval/Console noise (simulate human dev tools)
+      const originalEval = window.eval;
+      window.eval = function(code) {
+        if (Math.random() < 0.01) { // Rare "human" console
+          console.log('%cHuman here!', 'color: blue; font-size: 20px');
+        }
+        return originalEval.call(this, code);
+      };
+      const originalConsoleLog = console.log;
+      console.log = function(...args) {
+        if (Math.random() < 0.001) args.unshift(new Date().toISOString()); // Timestamp noise
+        return originalConsoleLog.apply(this, args);
+      };
+
+      // ClientRects noise (add subpixel jitter)
+      const originalGetClientRects = Element.prototype.getClientRects;
+      Element.prototype.getClientRects = function() {
+        const rects = originalGetClientRects.call(this);
+        return Array.from(rects).map(rect => ({
+          ...rect,
+          x: rect.x + (Math.random() - 0.5) * 0.1, // Subpixel noise
+          y: rect.y + (Math.random() - 0.5) * 0.1,
+        }));
+      };
+
+    } catch (e) {
+      console.error('Stealth init error:', e); // Silent in prod
+    }
   });
 }
 
 /* ---------------------------
-   Action Functions
+   Updated Helpers (Enhanced with delays)
 --------------------------- */
+async function detectProfileName(page, timeout = 5000) {
+  let profileName = "Unknown";
+  const nameSelectors = [
+    { selector: "h1", description: "h1 tag" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', description: "verified badge button p" },
+    { selector: ".text-heading-xlarge", description: "heading class fallback" }
+  ];
+  for (const { selector, description } of nameSelectors) {
+    try {
+      const nameText = await page.locator(selector).textContent({ timeout });
+      if (nameText && (profileName = nameText.trim()) !== "Unknown") {
+        console.log(`👤 Profile name found via ${description}: ${profileName} (raw: "${nameText.trim()}")`);
+        break;
+      }
+      await humanDelay('general', 200); // Short jitter between selectors
+    } catch (err) {
+      if (!err.message.includes('Timeout')) {
+        console.log(`⚠️ Name selector failed ${description}: ${err.message}`);
+      }
+    }
+  }
+  console.log(`👤 Final profile name: ${profileName}`);
+  return profileName;
+}
+
+async function detectDegree(page, timeout = 5000) {
+  let degree = "unknown";
+  const degreeSelectors = [
+    { selector: 'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child', description: "degree last p" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"] + p + p', description: "verified badge + p + p" },
+    { selector: 'div[data-view-name="profile-top-card-verified-badge"]', description: "verified badge container" },
+    // Legacy fallbacks
+    { selector: ".distance-badge .visually-hidden", description: "degree badge hidden text" },
+    { selector: ".distance-badge .dist-value", description: "degree badge visible value" }
+  ];
+  for (const { selector, description } of degreeSelectors) {
+    try {
+      const connectionInfo = await page.locator(selector).textContent({ timeout });
+      if (connectionInfo) {
+        const lowerInfo = connectionInfo.toLowerCase().trim();
+        let matchedDegree = null;
+        if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
+          matchedDegree = "2nd";
+        } else if (lowerInfo.includes("· 3rd") || lowerInfo.includes("3rd")) {
+          matchedDegree = "3rd";
+        } else if (lowerInfo.includes("· 1st") || lowerInfo.includes("1st")) {
+          matchedDegree = "1st";
+        }
+        if (matchedDegree) {
+          degree = matchedDegree; // Keep as "1st"/"2nd"/"3rd" (not full text)
+          console.log(`📊 Degree matched via ${description}: ${matchedDegree}`);
+          break;
+        }
+      }
+      await humanDelay('general', 200); // Short jitter
+    } catch (err) {
+      if (!err.message.includes('Timeout')) {
+        console.log(`⚠️ Skipping ${description}: ${err.message}`);
+      }
+    }
+  }
+  console.log(`📊 Detected degree: ${degree}`);
+  return degree;
+}
+
+async function getVisibleLocator(page, selectors, useLast = false, timeout = 5000) {
+  for (const selector of selectors) {
+    try {
+      let safeSelector = selector;
+      if (!selector.includes(':has(')) {
+        safeSelector += useLast ? ':last-of-type' : ':first-of-type';
+      }
+      const loc = page.locator(safeSelector);
+      const singleLoc = useLast ? loc.nth(-1) : loc.nth(0);
+      if (await singleLoc.isVisible({ timeout })) {
+        console.log(`✅ Using selector: ${selector} (useLast: ${useLast})`);
+        return singleLoc;
+      }
+      await humanDelay('general', 100); // Micro jitter
+    } catch (err) {
+      console.log(`⚠️ Selector failed: ${selector} - ${err.message}`);
+    }
+  }
+  return null;
+}
+
+async function getTextFromSelectors(page, selectors, timeout = 5000) {
+  for (const selector of selectors) {
+    try {
+      const text = await page.locator(selector).textContent({ timeout });
+      if (text && text.trim().length > 0) {
+        return text.trim();
+      }
+      await humanDelay('general', 100);
+    } catch (err) {
+      // Silenced non-critical timeouts for cleaner logs
+      if (!err.message.includes("Timeout")) {
+        console.log(`⚠️ Text selector failed: ${selector} - ${err.message}`);
+      }
+    }
+  }
+  return null;
+}
 
 /* ---------------------------
-   View Feed Action
+   Action Functions (All Enhanced)
+--------------------------- */
+/* ---------------------------
+   View Feed Action (Enhanced)
 --------------------------- */
 async function viewFeed(page) {
   console.log("📺 Starting to view LinkedIn feed...");
@@ -170,24 +557,27 @@ async function viewFeed(page) {
         `🔄 Feed viewing session ${session}/3 - Scrolling and pausing...`
       );
       await humanScroll(page, Math.floor(Math.random() * 5) + 3);
-      const pauseTime = Math.random() * 10000 + 5000;
-      console.log(`⏸️ Pausing for ${Math.round(pauseTime / 1000)} seconds...`);
-      await page.waitForTimeout(pauseTime);
+      // Micro-action: Occasional like or view pause
+      if (Math.random() < 0.3) {
+        await humanMouse(page, 2);
+        await humanDelay('profile_view'); // Simulate reading a post
+      }
+      await humanDelay('general'); // Session pause
       if (Math.random() > 0.5) {
         console.log("🖱️ Simulating mouse movement...");
         await humanMouse(page, 2);
       }
     }
-    await humanIdle(3000, 8000);
+    await humanIdle(); // Final idle
     console.log("✅ Finished viewing feed");
   } catch (err) {
     console.error("❌ Failed to view feed:", err.message);
   }
 }
-/* ---------------------------
-    Like Feed Action
---------------------------- */
 
+/* ---------------------------
+    Like Feed Action (Enhanced)
+--------------------------- */
 async function likeFeed(page) {
   console.log("📝 Starting to like a random post...");
   try {
@@ -196,7 +586,7 @@ async function likeFeed(page) {
       timeout: 60000,
     });
     await humanScroll(page, 5);
-    await humanIdle(2000, 4000);
+    await humanDelay('profile_view');
     const likeButtons = await page
       .locator(".reactions-react-button button[aria-label*='Like']")
       .all();
@@ -212,6 +602,7 @@ async function likeFeed(page) {
         })
         .catch(() => false);
       if (!isReacted) unreactedButtons.push(button);
+      await humanDelay('general', 200); // Short jitter between checks
     }
     if (unreactedButtons.length === 0) {
       console.log("⚠️ All visible posts are already reacted to");
@@ -228,23 +619,22 @@ async function likeFeed(page) {
     await selectedButton.scrollIntoViewIfNeeded();
     await selectedButton.click({ delay: 100 });
     console.log("👍 Liked the post");
-    await randomDelay(1000, 2000);
+    await humanDelay('general');
     console.log("✅ Finished liking the post");
-    await humanIdle(3000, 6000);
+    await humanIdle();
   } catch (err) {
     console.error("❌ Failed to like post:", err.message);
   }
 }
 
 /* ---------------------------
-   Check Degree Action
+   Check Degree Action (Enhanced)
 --------------------------- */
-
 async function checkDegree(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await humanIdle(2000, 4000);
+    await humanDelay('profile_view');
     await humanScroll(page, 4);
     let name = "Unknown User";
     const nameLocators = [
@@ -266,7 +656,6 @@ async function checkDegree(page, url) {
     }
     let degreeText = null;
     const degreeLocators = [
-      // New selectors first for faster, reliable detection
       {
         selector:
           'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child',
@@ -281,7 +670,6 @@ async function checkDegree(page, url) {
         selector: 'div[data-view-name="profile-top-card-verified-badge"]',
         description: "verified badge container",
       },
-      // Legacy fallbacks (will timeout silently if irrelevant)
       {
         selector: ".distance-badge .visually-hidden",
         description: "degree badge hidden text",
@@ -304,7 +692,6 @@ async function checkDegree(page, url) {
     let degree = "Unknown";
     if (degreeText) {
       const lowerInfo = degreeText.toLowerCase().trim();
-      // Improved matching: Look for "· 1st/2nd/3rd" pattern common in LinkedIn
       if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
         degree = "2nd";
       } else if (lowerInfo.includes("· 3rd") || lowerInfo.includes("3rd")) {
@@ -322,23 +709,20 @@ async function checkDegree(page, url) {
 }
 
 /* ---------------------------
-   Send Message Action
+   Send Message Action (Enhanced)
 --------------------------- */
-
 async function sendMessage(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await humanIdle(2000, 4000);
+    await humanDelay('profile_view');
     await closeAllMessageBoxes(page);
     let profileName = "Friend";
     const nameLocators = [
       "h1",
       'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
-      // For Structure 1
       "a[aria-label] h1",
       'a[href*="/in/"] h1',
-      // For Structure 2
       'div[data-view-name="profile-top-card-verified-badge"] p',
       'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
     ];
@@ -358,7 +742,6 @@ async function sendMessage(page, url) {
     }
     let is1stDegree = false;
     const degreeLocators = [
-      // Legacy fallbacks first for faster, reliable detection (if still present)
       {
         selector: ".distance-badge .visually-hidden",
         description: "degree badge hidden text",
@@ -367,7 +750,6 @@ async function sendMessage(page, url) {
         selector: ".distance-badge .dist-value",
         description: "degree badge visible value",
       },
-      // New selectors (will timeout silently if irrelevant)
       {
         selector:
           'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child',
@@ -435,18 +817,18 @@ async function sendMessage(page, url) {
     await humanMouse(page, 2);
     await messageButton.click({ delay: 100 });
     console.log("💬 Message box opened");
-    await randomDelay(1000, 2000);
+    await humanDelay('general');
     const message = `Hi ${profileName}, I'd like to connect and discuss potential opportunities. Looking forward to hearing from you!`;
     const messageInput = page.locator("div.msg-form__contenteditable");
     await messageInput.waitFor({ state: "visible", timeout: 10000 });
-    await humanType(page, "div.msg-form__contenteditable", message);
+    await humanType(page, "div.msg-form__contenteditable", message); // Enhanced
     console.log("📝 Message typed");
     const sendButton = page.locator("button.msg-form__send-button");
     await sendButton.waitFor({ state: "visible", timeout: 10000 });
     await humanMouse(page, 1);
     await sendButton.click({ delay: 100 });
     console.log(`✅ Message sent to ${profileName}`);
-    await randomDelay(2000, 4000);
+    await humanDelay('general');
     await closeAllMessageBoxes(page);
     console.log(`✅ Finished sending message to ${url}`);
   } catch (err) {
@@ -454,119 +836,25 @@ async function sendMessage(page, url) {
   }
 }
 
-
 /* ---------------------------
-   Updated Helpers
---------------------------- */
-async function detectProfileName(page, timeout = 5000) {
-  let profileName = "Unknown";
-  const nameSelectors = [
-    { selector: "h1", description: "h1 tag" },
-    { selector: 'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', description: "verified badge button p" },
-    { selector: ".text-heading-xlarge", description: "heading class fallback" }
-  ];
-  for (const { selector, description } of nameSelectors) {
-    try {
-      const nameText = await page.locator(selector).textContent({ timeout });
-      if (nameText && (profileName = nameText.trim()) !== "Unknown") {
-        console.log(`👤 Profile name found via ${description}: ${profileName} (raw: "${nameText.trim()}")`);
-        break;
-      }
-    } catch (err) {
-      if (!err.message.includes('Timeout')) {
-        console.log(`⚠️ Name selector failed ${description}: ${err.message}`);
-      }
-    }
-  }
-  console.log(`👤 Final profile name: ${profileName}`);
-  return profileName;
-}
-
-async function detectDegree(page, timeout = 5000) {
-  let degree = "unknown";
-  const degreeSelectors = [
-    { selector: 'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child', description: "degree last p" },
-    { selector: 'div[data-view-name="profile-top-card-verified-badge"] + p + p', description: "verified badge + p + p" },
-    { selector: 'div[data-view-name="profile-top-card-verified-badge"]', description: "verified badge container" },
-    // Legacy fallbacks
-    { selector: ".distance-badge .visually-hidden", description: "degree badge hidden text" },
-    { selector: ".distance-badge .dist-value", description: "degree badge visible value" }
-  ];
-  for (const { selector, description } of degreeSelectors) {
-    try {
-      const connectionInfo = await page.locator(selector).textContent({ timeout });
-      if (connectionInfo) {
-        const lowerInfo = connectionInfo.toLowerCase().trim();
-        let matchedDegree = null;
-        if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
-          matchedDegree = "2nd";
-        } else if (lowerInfo.includes("· 3rd") || lowerInfo.includes("3rd")) {
-          matchedDegree = "3rd";
-        } else if (lowerInfo.includes("· 1st") || lowerInfo.includes("1st")) {
-          matchedDegree = "1st";
-        }
-        if (matchedDegree) {
-          degree = matchedDegree;  // Keep as "1st"/"2nd"/"3rd" (not full text)
-          console.log(`📊 Degree matched via ${description}: ${matchedDegree}`);
-          break;
-        }
-      }
-    } catch (err) {
-      if (!err.message.includes('Timeout')) {
-        console.log(`⚠️ Skipping ${description}: ${err.message}`);
-      }
-    }
-  }
-  console.log(`📊 Detected degree: ${degree}`);
-  return degree;
-}
-
-async function getVisibleLocator(page, selectors, useLast = false, timeout = 5000) {
-  for (const selector of selectors) {
-    try {
-      let safeSelector = selector;
-      if (!selector.includes(':has(')) {
-        safeSelector += useLast ? ':last-of-type' : ':first-of-type';
-      }
-      const loc = page.locator(safeSelector);
-      const singleLoc = useLast ? loc.nth(-1) : loc.nth(0);
-      if (await singleLoc.isVisible({ timeout })) {
-        console.log(`✅ Using selector: ${selector} (useLast: ${useLast})`);
-        return singleLoc;
-      }
-    } catch (err) {
-      console.log(`⚠️ Selector failed: ${selector} - ${err.message}`);
-    }
-  }
-  return null;
-}
-
-/* ---------------------------
-   Updated Function
+   Check Connection Accepted Action (Enhanced)
 --------------------------- */
 async function checkConnectionAccepted(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(1000, 3000);
-
-    // Robust name detection
+    await humanDelay('profile_view');
     let profileName = await detectProfileName(page);
-    
-    // Updated degree detection
     let degree = await detectDegree(page);
     if (degree === "unknown") {
       degree = "Unknown degree";
     }
-    
     let status = "Unknown";
-    // Debug log for degree check
     console.log(`🔍 Degree check: "${degree}" (includes "1st"? ${degree.includes("1st")})`);
     if (degree.includes("1st")) {
       status = "Accepted";
       console.log(`✅ ${profileName}: ${degree} - ${status}`);
     } else {
-      // Accept button (incoming)
       const acceptSelectors = [
         ".ph5 [aria-label*='Accept']",
         'button[aria-label^="Accept"][aria-label*="request to connect"]',
@@ -574,8 +862,6 @@ async function checkConnectionAccepted(page, url) {
         '[data-view-name="edge-creation-accept-action"] button'
       ];
       const acceptButton = await getVisibleLocator(page, acceptSelectors);
-
-      // Pending/withdraw (outgoing pending)
       const pendingSelectors = [
         ".ph5 button:has-text('Pending')",
         ".ph5 button:has-text('Withdraw')",
@@ -584,8 +870,6 @@ async function checkConnectionAccepted(page, url) {
         '[data-view-name="edge-creation-withdraw-action"] button'
       ];
       const pendingButton = await getVisibleLocator(page, pendingSelectors);
-
-      // Connect button (not sent)
       const connectSelectors = [
         ".ph5 button:has-text('Connect')",
         'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
@@ -597,7 +881,6 @@ async function checkConnectionAccepted(page, url) {
         `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
       ];
       const connectButton = await getVisibleLocator(page, connectSelectors, true);
-
       if (acceptButton) {
         status = "Incoming Request (Accept Pending)";
         console.log(`📥 ${profileName}: ${degree} - ${status} (Accept button)`);
@@ -608,7 +891,6 @@ async function checkConnectionAccepted(page, url) {
         status = "Not Sent Yet";
         console.log(`⛔ ${profileName}: ${degree} - ${status} (Connect button)`);
       } else {
-        // More button
         const moreSelectors = [
           ".ph5 button:has-text('More')",
           ".ph5 [aria-label='More actions']",
@@ -616,30 +898,24 @@ async function checkConnectionAccepted(page, url) {
           '[data-view-name="relationship-building-button"] ~ button[aria-label="More"]'
         ];
         const moreButton = await getVisibleLocator(page, moreSelectors);
-        
         if (moreButton) {
           console.log("🔽 Clicking moreButton...");
-          await moreButton.click({ delay: 100, timeout: 10000 });  // Explicit timeout to prevent hang
+          await moreButton.click({ delay: 100, timeout: 10000 });
           console.log("🔽 More dropdown opened");
-          await randomDelay(1000, 2000);
+          await humanDelay('general');
           console.log("🔍 Looking for remove/withdraw options...");
-
-          // Remove connection (accepted)
           const removeSelectors = [
             ".artdeco-dropdown__content span:has-text('Remove this connection')",
             ".artdeco-dropdown__content [aria-label*='Remove connection']",
             ".artdeco-dropdown__content li:has-text('Remove')"
           ];
           const removeConnection = await getVisibleLocator(page, removeSelectors, true);
-
-          // Withdraw (pending)
           const withdrawSelectors = [
             ".artdeco-dropdown__content span:has-text('Withdraw invitation')",
             ".artdeco-dropdown__content [aria-label*='Withdraw invitation']",
             ".artdeco-dropdown__content li:has-text('Withdraw')"
           ];
           const withdrawOption = await getVisibleLocator(page, withdrawSelectors);
-
           if (removeConnection) {
             status = "Accepted";
             console.log(`✅ ${profileName}: ${degree} - ${status} (Remove Connection)`);
@@ -650,9 +926,7 @@ async function checkConnectionAccepted(page, url) {
             status = "Unknown";
             console.log(`❓ ${profileName}: ${degree} - ${status}`);
           }
-
-          // Close dropdown
-          console.log("🔼 Closing more dropdown...");
+          await humanMouse(page, 1);
           await moreButton.click({ delay: 100, timeout: 5000 });
           console.log("🔼 Dropdown closed");
         } else {
@@ -668,16 +942,14 @@ async function checkConnectionAccepted(page, url) {
   }
 }
 
-
-
 /* ---------------------------
-    Check Reply Action
+   Check Reply Action (Enhanced)
 --------------------------- */
 async function checkReply(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(4000, 6000); // Increased delay for page stability
+    await humanDelay('profile_view');
     const closeButton = page.locator("button:has-text('Close your conversation')").first();
     const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
     if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -687,10 +959,8 @@ async function checkReply(page, url) {
     const nameLocators = [
       "h1",
       'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
-      // For Structure 1
       "a[aria-label] h1",
       'a[href*="/in/"] h1',
-      // For Structure 2
       'div[data-view-name="profile-top-card-verified-badge"] p',
       'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
     ];
@@ -736,33 +1006,27 @@ async function checkReply(page, url) {
     if (messageButton) {
       console.log(`✅ Message button found for ${profileName}`);
       await messageButton.click();
-      await randomDelay(4000, 7000);
-
-      // Check for all reply messages
+      await humanDelay('general');
       const replyElements = await page.locator(".msg-s-event-listitem--other").all();
       if (replyElements.length > 0) {
         replyStatus = "Reply Received";
         console.log(`Sender: ${profileName}`);
-        console.log(`  - Reply Status: ${replyStatus}`);
-
-        // Get sender and timestamp from the first reply element as a fallback
+        console.log(` - Reply Status: ${replyStatus}`);
         const firstReply = replyElements[0];
         let senderName = await firstReply.locator(".msg-s-message-group__name").textContent({ timeout: 5000 }).catch(() => profileName);
         let timestamp = await firstReply.locator(".msg-s-message-group__timestamp").textContent({ timeout: 5000 }).catch(() => "Unknown Time");
-
         for (let i = 0; i < replyElements.length; i++) {
           const replyElement = replyElements[i];
           const messageText = await replyElement.locator(".msg-s-event-listitem__body").textContent({ timeout: 5000 }).catch(() => "Unable to retrieve message");
           console.log(
             `- Message ${i + 1}: From ${senderName.trim().replace(/\s+/g, " ")} at ${timestamp.trim().replace(/\s+/g, " ")} - "${messageText.trim() || "No readable message content"}"`
           );
+          await humanDelay('general', 200); // Short between logs
         }
       } else {
         console.log(`Sender: ${profileName}`);
-        console.log(`  - Reply Status: ${replyStatus} (No reply elements found)`);
+        console.log(` - Reply Status: ${replyStatus} (No reply elements found)`);
       }
-
-      // Close message box
       const closeButton = page.locator("button:has-text('Close your conversation')").first();
       const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
       if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -770,11 +1034,11 @@ async function checkReply(page, url) {
       } else if (await altClose.isVisible({ timeout: 5000 }).catch(() => false)) {
         await altClose.click();
       }
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
     } else {
       console.log(`⚠️ Message button not found for ${profileName} after 10 seconds`);
       console.log(`Sender: ${profileName}`);
-      console.log(`  - Reply Status: No Reply Received (No Message Button)`);
+      console.log(` - Reply Status: No Reply Received (No Message Button)`);
     }
     console.log(`✅ Done with ${url}`);
   } catch (err) {
@@ -782,16 +1046,14 @@ async function checkReply(page, url) {
   }
 }
 
-
-//---------------------------
-//   Grab Replies Action
-//---------------------------
+/* ---------------------------
+   Grab Replies Action (Enhanced)
+--------------------------- */
 async function grabReplies(page, url) {
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(4000, 6000); // Increased delay for page stability
-    // Close any lingering message overlays
+    await humanDelay('profile_view');
     const closeButton = page.locator("button:has-text('Close your conversation')").first();
     const altClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
     if (await closeButton.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -801,16 +1063,14 @@ async function grabReplies(page, url) {
       await altClose.click();
       console.log("🗑️ Closed via alt close");
     }
-
-    // Dynamic profile name extraction (fallbacks for varying structures)
     let profileName = "Unknown";
     const nameLocators = [
-      "h1", // Primary: Profile header
-      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', // Verified badge variant
-      "a[aria-label] h1", // Aria-linked header
-      'a[href*="/in/"] h1', // LinkedIn URL header
-      'div[data-view-name="profile-top-card-verified-badge"] p', // Fallback p in badge
-      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type', // First p variant
+      "h1",
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+      "a[aria-label] h1",
+      'a[href*="/in/"] h1',
+      'div[data-view-name="profile-top-card-verified-badge"] p',
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
     ];
     for (const selector of nameLocators) {
       try {
@@ -821,114 +1081,86 @@ async function grabReplies(page, url) {
           break;
         }
       } catch (err) {
-        // Silent fail on timeout/non-critical errors; try next selector
         if (!err.message.includes("Timeout")) console.log(`⚠️ Name selector failed: ${selector} - ${err.message}`);
       }
     }
-
     let replyStatus = "No Messages Found";
-    // Enhanced message button selectors (prioritize visibility with fallbacks)
     const messageButtonLocators = [
       { selector: "div.ph5 button:has-text('Message')", description: "header message button" },
       { selector: 'a[data-view-name="profile-primary-message"]', description: "primary message link" },
       { selector: 'a[data-view-name="profile-secondary-message"]', description: "secondary message link" },
-      { selector: 'button[aria-label*="Message"]', description: "aria message button" }, // New: Aria fallback
+      { selector: 'button[aria-label*="Message"]', description: "aria message button" },
     ];
     let messageButton = null;
     for (const { selector, description } of messageButtonLocators) {
       try {
-        const btn = page.locator(selector).last(); // Use .last() for multi-matches in feed-like views
-        await btn.waitFor({ state: "visible", timeout: 5000 }); // Slightly longer for stability
+        const btn = page.locator(selector).last();
+        await btn.waitFor({ state: "visible", timeout: 5000 });
         messageButton = btn;
         console.log(`✅ Found message button (${description})`);
         break;
       } catch (err) {
-        // Silent fail; try next
         if (!err.message.includes("Timeout")) console.log(`⚠️ Message button selector failed: ${description} - ${err.message}`);
       }
     }
-
     if (messageButton) {
       console.log(`💬 Opening conversation for ${profileName}`);
-      await humanMouse(page, 2); // Human-like hover before click
+      await humanMouse(page, 2);
       await messageButton.click({ delay: 100 });
-      await randomDelay(5000, 8000); // Extended wait for full message list load (dynamic content)
-
-      // Grab FULL conversation: Target all event list items (both own and other)
-      // Use li.msg-s-message-list__event for containers, then .msg-s-event-listitem inside
+      await humanDelay('general');
       const eventContainers = await page.locator('ul.msg-s-message-list-content > li.msg-s-message-list__event').all();
-      const timeHeadings = await page.locator('.msg-s-message-list__time-heading').all(); // Global headings for grouping
-
+      const timeHeadings = await page.locator('.msg-s-message-list__time-heading').all();
       if (eventContainers.length > 0) {
         replyStatus = "Conversation Retrieved";
         console.log(`Sender: ${profileName}`);
-        console.log(`  - Status: ${replyStatus} (${eventContainers.length} total messages)`);
+        console.log(` - Status: ${replyStatus} (${eventContainers.length} total messages)`);
         console.log("📜 Full Conversation Log:");
-
-        let currentDateHeading = "Unknown Date"; // Default; update dynamically
+        let currentDateHeading = "Unknown Date";
         let headingIndex = 0;
-        let lastTimestamp = null; // Track last known timestamp for carry-forward
-
+        let lastTimestamp = null;
         for (let i = 0; i < eventContainers.length; i++) {
           const eventContainer = eventContainers[i];
           const msgElement = eventContainer.locator('.msg-s-event-listitem').first();
-
-          // Dynamic date: Check for time-heading within this event container or advance global
           let localHeading = await eventContainer.locator('.msg-s-message-list__time-heading').textContent({ timeout: 2000 }).catch(() => "");
           if (localHeading.trim()) {
             currentDateHeading = localHeading.trim();
           } else if (headingIndex < timeHeadings.length) {
-            // Fallback to global headings (approximate)
             const globalHeading = await timeHeadings[headingIndex].textContent({ timeout: 2000 }).catch(() => "");
             if (globalHeading.trim()) {
               currentDateHeading = globalHeading.trim();
               headingIndex++;
             }
           }
-
-          // Sender detection: Use class check for --other (from profileName) vs own ("Vamsi Reddy")
           const isOther = await msgElement.evaluate(el => el.classList.contains('msg-s-event-listitem--other'));
           let senderName = isOther ? profileName : "Vamsi Reddy";
-
-          // Timestamp: From .msg-s-message-group__timestamp (own may lack, fallback)
           let timestamp = await msgElement.locator('.msg-s-message-group__timestamp').textContent({ timeout: 3000 }).catch(() => "Unknown Time");
           timestamp = timestamp ? timestamp.trim().replace(/\s+/g, " ") : "Unknown Time";
-          // Carry forward: If unknown, use last known timestamp
           if (timestamp === "Unknown Time" && lastTimestamp) {
             timestamp = lastTimestamp;
           }
-          // Update last known timestamp if this one is valid
           if (timestamp !== "Unknown Time") {
             lastTimestamp = timestamp;
           }
-
-          // Message body: Use .msg-s-event-listitem__body with textContent (matches working logic)
           let messageText = await msgElement.locator('.msg-s-event-listitem__body').textContent({ timeout: 5000 }).catch(() => "");
           messageText = messageText.replace(/<!---->/g, "").trim();
           if (!messageText || messageText.length === 0) {
             messageText = "No readable content";
           }
-
-          // Seen receipts: Check for presence and title
           let seenInfo = "";
           const seenCount = await msgElement.locator('.msg-s-event-listitem__seen-receipts img').count();
           if (seenCount > 0) {
             const seenTitle = await msgElement.locator('.msg-s-event-listitem__seen-receipts img').getAttribute('title', { timeout: 2000 }).catch(() => "");
             seenInfo = seenTitle ? ` (Seen: ${seenTitle})` : " (Seen)";
           }
-
           console.log(
-            `  - Msg ${i + 1}/${eventContainers.length}: From "${senderName}" on ${currentDateHeading} at ${timestamp}${seenInfo} - "${messageText}"`
+            ` - Msg ${i + 1}/${eventContainers.length}: From "${senderName}" on ${currentDateHeading} at ${timestamp}${seenInfo} - "${messageText}"`
           );
-
-          await randomDelay(200, 500); // Micro-pause for readability in logs
+          await humanDelay('general', 200); // Micro-pause
         }
       } else {
         console.log(`Sender: ${profileName}`);
-        console.log(`  - Status: ${replyStatus} (Empty conversation)`);
+        console.log(` - Status: ${replyStatus} (Empty conversation)`);
       }
-
-      // Graceful close
       const finalCloseButton = page.locator("button:has-text('Close your conversation')").first();
       const finalAltClose = page.locator(".msg-overlay-bubble-header__control svg[use*='close-small']").first();
       if (await finalCloseButton.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -936,11 +1168,11 @@ async function grabReplies(page, url) {
       } else if (await finalAltClose.isVisible({ timeout: 5000 }).catch(() => false)) {
         await finalAltClose.click();
       }
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
     } else {
       console.log(`⚠️ Message button not found for ${profileName} (skipping conversation)`);
       console.log(`Sender: ${profileName}`);
-      console.log(`  - Status: No Reply Received (No Message Button)`);
+      console.log(` - Status: No Reply Received (No Message Button)`);
     }
     console.log(`✅ Done with ${url} (${replyStatus})`);
   } catch (err) {
@@ -949,15 +1181,13 @@ async function grabReplies(page, url) {
 }
 
 /* ---------------------------
-   Send Follow Action
+   Send Follow Action (Enhanced)
 --------------------------- */
 async function sendFollow(page, url) {
   console.log(`🌐 Visiting: ${url} to follow 3rd degree connection`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(1000, 3000);
-
-    // Step 1️⃣ — Extract Profile Name (Robust locators from sendMessageToProfile)
+    await humanDelay('profile_view');
     let profileName = "Unknown";
     const nameLocators = [
       "h1",
@@ -980,11 +1210,9 @@ async function sendFollow(page, url) {
           break;
         }
       } catch {
-        // silent fail, try next
+        // silent fail
       }
     }
-
-    // Step 2️⃣ — Detect Degree (Updated with robust locators)
     let degree = "Unknown";
     const degreeLocators = [
       { selector: 'div:has(div[data-view-name="profile-top-card-verified-badge"]) ~ p:last-child', description: "degree last p" },
@@ -999,7 +1227,6 @@ async function sendFollow(page, url) {
         const connectionInfo = await page.locator(selector).textContent({ timeout: 5000 });
         if (connectionInfo) {
           const lowerInfo = connectionInfo.toLowerCase().trim();
-          // Improved matching: Look for "· 1st/2nd/3rd" pattern common in LinkedIn
           if (lowerInfo.includes("· 2nd") || lowerInfo.includes("2nd")) {
             degree = "2nd";
             break;
@@ -1018,9 +1245,7 @@ async function sendFollow(page, url) {
       }
     }
     console.log(`📊 Detected degree: ${degree}`);
-
     if (degree === "3rd") {
-      // Step 3️⃣ — Locate Follow Button (Robust array like message buttons)
       const followButtonLocators = [
         {
           selector: ".ph5.pb5 [aria-label*='Follow']",
@@ -1055,7 +1280,6 @@ async function sendFollow(page, url) {
           description: "topcard with secondary-message relationship follow text",
         },
       ];
-
       let followButton = null;
       for (const { selector, description } of followButtonLocators) {
         try {
@@ -1068,14 +1292,11 @@ async function sendFollow(page, url) {
           // try next
         }
       }
-
       if (followButton) {
-        // Step 4️⃣ — Click Follow Button
         await humanMouse(page, 2);
         await followButton.click({ delay: 100 });
         console.log(`✅ Followed ${profileName} via direct button`);
       } else {
-        // Step 5️⃣ — Fallback: More Actions Path (Robust locators)
         const moreButtonLocators = [
           {
             selector: ".ph5 [aria-label='More actions']",
@@ -1090,7 +1311,6 @@ async function sendFollow(page, url) {
             description: "more text button",
           },
         ];
-
         let moreButton = null;
         for (const { selector, description } of moreButtonLocators) {
           try {
@@ -1103,14 +1323,11 @@ async function sendFollow(page, url) {
             // try next
           }
         }
-
         if (moreButton) {
           await humanMouse(page, 2);
           await moreButton.click({ delay: 100 });
           console.log("💡 More button clicked");
-          await randomDelay(1000, 2000);
-
-          // Step 6️⃣ — Locate Dropdown Follow (Robust array)
+          await humanDelay('general');
           const dropdownFollowLocators = [
             {
               selector: ".ph5.pb5 .artdeco-dropdown__content-inner [aria-label*='Follow']",
@@ -1129,7 +1346,6 @@ async function sendFollow(page, url) {
               description: "dropdown area follow",
             },
           ];
-
           let dropdownFollow = null;
           for (const { selector, description } of dropdownFollowLocators) {
             try {
@@ -1142,7 +1358,6 @@ async function sendFollow(page, url) {
               // try next
             }
           }
-
           if (dropdownFollow) {
             await humanMouse(page, 1);
             await dropdownFollow.click({ delay: 100 });
@@ -1150,15 +1365,16 @@ async function sendFollow(page, url) {
           } else {
             console.log(`⚠️ Follow option not found in dropdown for ${profileName}`);
           }
+          await moreButton.click({ delay: 100 });
+          await humanDelay('general');
         } else {
           console.log(`⚠️ No More actions button found for ${profileName}`);
         }
       }
     } else {
       console.log(`⏭️ Skipping ${profileName} - Not a 3rd degree connection (Degree: ${degree})`);
-      
     }
-    await randomDelay(1000, 2000);
+    await humanDelay('general');
     console.log(`✅ Done with ${url}`);
     console.log(`----------------------------`);
   } catch (err) {
@@ -1167,16 +1383,13 @@ async function sendFollow(page, url) {
 }
 
 /* ---------------------------
-   Send Follow Any Action
+   Send Follow Any Action (Enhanced)
 --------------------------- */
-
 async function sendFollowAny(page, url) {
   console.log(`🌐 Visiting: ${url} to follow (any degree)`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(1000, 3000);
-
-    // Step 1️⃣ — Extract Profile Name (Robust locators from sendFollow)
+    await humanDelay('profile_view');
     let profileName = "Unknown";
     const nameLocators = [
       "h1",
@@ -1199,11 +1412,9 @@ async function sendFollowAny(page, url) {
           break;
         }
       } catch {
-        // silent fail, try next
+        // silent fail
       }
     }
-
-    // Step 2️⃣ — Check if Already Following (Header-specific locators to avoid footer/dropdown matches)
     const followingButtonLocators = [
       {
         selector: 'div[data-view-name="edge-creation-follow-action"] button[aria-label*="Following, click to unfollow"]',
@@ -1218,11 +1429,10 @@ async function sendFollowAny(page, url) {
         description: "ph5 header following button (scoped to button)",
       },
     ];
-
     let isAlreadyFollowing = false;
     for (const { selector, description } of followingButtonLocators) {
       try {
-        const btn = page.locator(selector).nth(2); // Use .last() for selectors matching multiple elements
+        const btn = page.locator(selector).nth(2);
         await btn.waitFor({ state: "visible", timeout: 3000 });
         isAlreadyFollowing = true;
         console.log(`⏭️ Skipping ${profileName} - Already following (detected via ${description})`);
@@ -1231,10 +1441,7 @@ async function sendFollowAny(page, url) {
         // try next
       }
     }
-
-    // Optional: If needed, check dropdown for following (requires opening More first)
     if (!isAlreadyFollowing) {
-      // Temporarily open More to check dropdown following option
       const moreButtonLocatorsTemp = [
         {
           selector: ".ph5 [aria-label='More actions']",
@@ -1249,7 +1456,6 @@ async function sendFollowAny(page, url) {
           description: "more text button",
         },
       ];
-
       let moreButtonTemp = null;
       for (const { selector, description } of moreButtonLocatorsTemp) {
         try {
@@ -1262,12 +1468,10 @@ async function sendFollowAny(page, url) {
           // try next
         }
       }
-
       if (moreButtonTemp) {
         await humanMouse(page, 2);
         await moreButtonTemp.click({ delay: 100 });
-        await randomDelay(1000, 2000);
-
+        await humanDelay('general');
         const dropdownFollowingLocators = [
           {
             selector: ".artdeco-dropdown__content div[aria-label*='Unfollow']",
@@ -1278,11 +1482,10 @@ async function sendFollowAny(page, url) {
             description: "global following aria-label in dropdown",
           },
         ];
-
         let dropdownFollowing = null;
         for (const { selector, description } of dropdownFollowingLocators) {
           try {
-            const elem = page.locator(selector).last(); // Use .last() for selectors matching multiple elements
+            const elem = page.locator(selector).last();
             await elem.waitFor({ state: "visible", timeout: 2000 });
             dropdownFollowing = elem;
             console.log(`⏭️ Skipping ${profileName} - Already following in dropdown (detected via ${description})`);
@@ -1292,15 +1495,11 @@ async function sendFollowAny(page, url) {
             // try next
           }
         }
-
-        // Close dropdown
         await moreButtonTemp.click({ delay: 100 });
-        await randomDelay(500, 1000);
+        await humanDelay('general');
       }
     }
-
     if (!isAlreadyFollowing) {
-      // Step 3️⃣ — Locate Follow Button (Robust array like sendFollow)
       const followButtonLocators = [
         {
           selector: ".ph5.pb5 [aria-label*='Follow']",
@@ -1335,7 +1534,6 @@ async function sendFollowAny(page, url) {
           description: "topcard with secondary-message relationship follow text",
         },
       ];
-
       let followButton = null;
       for (const { selector, description } of followButtonLocators) {
         try {
@@ -1348,14 +1546,11 @@ async function sendFollowAny(page, url) {
           // try next
         }
       }
-
       if (followButton) {
-        // Step 4️⃣ — Click Follow Button
         await humanMouse(page, 2);
         await followButton.click({ delay: 100 });
         console.log(`✅ Followed ${profileName} via direct button`);
       } else {
-        // Step 5️⃣ — Fallback: More Actions Path (Robust locators)
         const moreButtonLocators = [
           {
             selector: ".ph5 [aria-label='More actions']",
@@ -1370,7 +1565,6 @@ async function sendFollowAny(page, url) {
             description: "more text button",
           },
         ];
-
         let moreButton = null;
         for (const { selector, description } of moreButtonLocators) {
           try {
@@ -1383,14 +1577,11 @@ async function sendFollowAny(page, url) {
             // try next
           }
         }
-
         if (moreButton) {
           await humanMouse(page, 2);
           await moreButton.click({ delay: 100 });
           console.log("💡 More button clicked");
-          await randomDelay(1000, 2000);
-
-          // Step 6️⃣ — Locate Dropdown Follow (Robust array)
+          await humanDelay('general');
           const dropdownFollowLocators = [
             {
               selector: ".ph5.pb5 .artdeco-dropdown__content-inner [aria-label*='Follow']",
@@ -1409,7 +1600,6 @@ async function sendFollowAny(page, url) {
               description: "dropdown area follow",
             },
           ];
-
           let dropdownFollow = null;
           for (const { selector, description } of dropdownFollowLocators) {
             try {
@@ -1422,7 +1612,6 @@ async function sendFollowAny(page, url) {
               // try next
             }
           }
-
           if (dropdownFollow) {
             await humanMouse(page, 1);
             await dropdownFollow.click({ delay: 100 });
@@ -1430,17 +1619,14 @@ async function sendFollowAny(page, url) {
           } else {
             console.log(`⚠️ Follow option not found in dropdown for ${profileName}`);
           }
-
-          // Close dropdown after action
           await moreButton.click({ delay: 100 });
-          await randomDelay(500, 1000);
+          await humanDelay('general');
         } else {
           console.log(`⚠️ No More actions button found for ${profileName}`);
         }
       }
     }
-
-    await randomDelay(1000, 2000);
+    await humanDelay('general');
     console.log(`✅ Done with ${url}`);
     console.log(`----------------------------`);
   } catch (err) {
@@ -1449,15 +1635,13 @@ async function sendFollowAny(page, url) {
 }
 
 /* ---------------------------
-    Withdraw Request Action
------------------------------- */
+    Withdraw Request Action (Enhanced)
+--------------------------- */
 async function withdrawRequest(page, url) {
   console.log(`🌐 Visiting: ${url} to withdraw request`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(1000, 3000);
-
-    // Step 1️⃣ — Extract Profile Name (Robust locators)
+    await humanDelay('profile_view');
     let profileName = "Unknown";
     const nameLocators = [
       "h1",
@@ -1476,11 +1660,9 @@ async function withdrawRequest(page, url) {
           break;
         }
       } catch {
-        // silent fail, try next
+        // silent fail
       }
     }
-
-    // Step 2️⃣ — Check Header Withdraw (Robust locators with .last())
     const headerWithdrawLocators = [
       {
         selector: 'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] button[aria-label*="Pending, click to withdraw invitation"]',
@@ -1503,7 +1685,6 @@ async function withdrawRequest(page, url) {
         description: "global pending invitation aria-label",
       },
     ];
-
     let headerWithdraw = null;
     for (const { selector, description } of headerWithdrawLocators) {
       try {
@@ -1516,14 +1697,12 @@ async function withdrawRequest(page, url) {
         // try next
       }
     }
-
     if (headerWithdraw) {
       await humanMouse(page, 2);
       await headerWithdraw.click({ delay: 100 });
       console.log("💡 Header withdraw clicked");
-      await randomDelay(1000, 2000);
+      await humanDelay('withdraw');
     } else {
-      // Step 3️⃣ — Fallback: More Actions Path (Robust locators with .last())
       const moreButtonLocatorsTemp = [
         {
           selector: ".ph5 [aria-label='More actions']",
@@ -1538,7 +1717,6 @@ async function withdrawRequest(page, url) {
           description: "more text button",
         },
       ];
-
       let moreButton = null;
       for (const { selector, description } of moreButtonLocatorsTemp) {
         try {
@@ -1551,14 +1729,11 @@ async function withdrawRequest(page, url) {
           // try next
         }
       }
-
       if (moreButton) {
         await humanMouse(page, 2);
         await moreButton.click({ delay: 100 });
         console.log("💡 More button clicked");
-        await randomDelay(1000, 2000);
-
-        // Step 4️⃣ — Locate Dropdown Withdraw (Robust array with .last())
+        await humanDelay('general');
         const dropdownWithdrawLocators = [
           {
             selector: ".ph5 .artdeco-dropdown__content [aria-label*='Pending, click to withdraw invitation sent to']",
@@ -1577,7 +1752,6 @@ async function withdrawRequest(page, url) {
             description: "dropdown clock icon pending",
           },
         ];
-
         let dropdownWithdraw = null;
         for (const { selector, description } of dropdownWithdrawLocators) {
           try {
@@ -1590,29 +1764,23 @@ async function withdrawRequest(page, url) {
             // try next
           }
         }
-
         if (dropdownWithdraw) {
           await humanMouse(page, 1);
           await dropdownWithdraw.click({ delay: 100 });
           console.log("💡 Dropdown withdraw clicked");
-          await randomDelay(1000, 2000);
+          await humanDelay('withdraw');
         } else {
           console.log(`⚠️ No pending/withdraw option found in dropdown for ${profileName}`);
-          // Close dropdown
           await moreButton.click({ delay: 100 });
           return;
         }
-
-        // Close dropdown after click
         await moreButton.click({ delay: 100 });
-        await randomDelay(500, 1000);
+        await humanDelay('general');
       } else {
         console.log(`⚠️ No More actions button found for ${profileName}`);
         return;
       }
     }
-
-    // Step 5️⃣ — Confirm Withdraw in Dialog (Robust locators with .first())
     const withdrawButtonLocators = [
       {
         selector: `div[role='alertdialog'] button:has-text('Withdraw')`,
@@ -1634,9 +1802,7 @@ async function withdrawRequest(page, url) {
         selector: 'dialog button:has-text("Withdraw")',
         description: "dialog withdraw text",
       },
-      
     ];
-
     let withdrawButton = null;
     for (const { selector, description } of withdrawButtonLocators) {
       try {
@@ -1649,7 +1815,6 @@ async function withdrawRequest(page, url) {
         // try next
       }
     }
-
     if (withdrawButton) {
       await humanMouse(page, 1);
       await withdrawButton.click({ delay: 100 });
@@ -1657,8 +1822,7 @@ async function withdrawRequest(page, url) {
     } else {
       console.log(`⚠️ Withdraw confirm button not found for ${profileName}`);
     }
-
-    await randomDelay(1000, 2000);
+    await humanDelay('withdraw');
     console.log(`✅ Done with ${url}`);
     console.log(`----------------------------`);
   } catch (err) {
@@ -1667,23 +1831,19 @@ async function withdrawRequest(page, url) {
 }
 
 /* ---------------------------
-   Premium Status Check
+   Premium Status Check (Enhanced)
 --------------------------- */
 async function checkPremiumStatus(page) {
   console.log("🔶 Checking LinkedIn premium status...");
-  await humanIdle(1000, 2500);
-
-  // Click on Me button
+  await humanIdle();
   const meBtn = page.locator(`nav button:has-text('Me')`);
   if (!(await meBtn.isVisible({ timeout: 5000 }))) {
     console.log("❌ Me button not found.");
     return false;
   }
   await meBtn.click();
-  await randomDelay(500, 1200);
-  await humanIdle(3000, 4000);
-
-  // Click on Settings & Privacy
+  await humanDelay('general');
+  await humanIdle();
   const settings = page.locator('a:has-text("Settings & Privacy")');
   if (!(await settings.first().isVisible({ timeout: 5000 }))) {
     await page.goBack();
@@ -1692,9 +1852,7 @@ async function checkPremiumStatus(page) {
   }
   await settings.first().click();
   await page.waitForLoadState("domcontentloaded");
-  await humanIdle(5000, 10000);
-
-  // Go to Subscriptions & payments
+  await humanIdle();
   const subscriptions = page.locator(
     'li #premiumManageAccount, li a[href*="premium"]'
   );
@@ -1705,15 +1863,11 @@ async function checkPremiumStatus(page) {
   }
   await subscriptions.first().click();
   await page.waitForLoadState("domcontentloaded");
-  await humanIdle(5000, 10000);
-
-  // Check if plan details element is visible
+  await humanIdle();
   const planLocator = page.locator(
     ".sans-medium.t-bold.t-black.premium-subscription-overview-settings-card__header"
   );
-
-  await humanIdle(5000, 10000);
-
+  await humanIdle();
   const isPremium = await planLocator.isVisible().catch(() => false);
   if (isPremium) {
     const plan = await planLocator.innerText().catch(() => "Unknown");
@@ -1721,29 +1875,22 @@ async function checkPremiumStatus(page) {
   } else {
     console.log("❌ No premium subscription found (Not Premium).");
   }
-
-  // Navigate back to feed
   await page.goto("https://www.linkedin.com/feed/", {
     waitUntil: "domcontentloaded",
   });
-  await humanIdle(2000, 4000);
-
+  await humanIdle();
   return isPremium;
 }
 
 /* ---------------------------
-   Send Message Function (No Degree Check)
+   Send Message To Profile (No Degree Check) (Enhanced)
 --------------------------- */
 async function sendMessageToProfile(page, url) {
   console.log(`💬 Processing profile for messaging: ${url}`);
-
   try {
-    // Step 1️⃣ — Load profile page
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await humanIdle(2000, 4000);
+    await humanDelay('profile_view');
     await closeAllMessageBoxes(page);
-
-    // Step 2️⃣ — Extract Profile Name
     let profileName = "Friend";
     const nameLocators = [
       "h1",
@@ -1753,7 +1900,6 @@ async function sendMessageToProfile(page, url) {
       'div[data-view-name="profile-top-card-verified-badge"] p',
       'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
     ];
-
     for (const selector of nameLocators) {
       try {
         const text = await page
@@ -1767,11 +1913,9 @@ async function sendMessageToProfile(page, url) {
           break;
         }
       } catch {
-        // silent fail, try next
+        // silent fail
       }
     }
-
-    // Step 3️⃣ — Locate Message Button
     const messageButtonLocators = [
       {
         selector: "div.ph5 button:has-text('Message')",
@@ -1786,7 +1930,6 @@ async function sendMessageToProfile(page, url) {
         description: "secondary message button",
       },
     ];
-
     let messageButton = null;
     for (const { selector, description } of messageButtonLocators) {
       try {
@@ -1799,36 +1942,19 @@ async function sendMessageToProfile(page, url) {
         // try next
       }
     }
-
     if (!messageButton) {
       console.log(`⛔ No Message button found for ${profileName} (${url})`);
       return;
     }
-
-    // Step 4️⃣ — Open message dialog
     await humanMouse(page, 2);
     await messageButton.click({ delay: 100 });
     console.log("💬 Message box opened");
-    await randomDelay(1000, 2000);
-
-    // // Step 5️⃣ — Locate message input
-    // const messageInputSelector = "div.msg-form__contenteditable";
-    // const messageInput = page.locator(messageInputSelector);
-    // await messageInput.waitFor({ state: "visible", timeout: 10000 });
-
-    // // Step 6️⃣ — Type message
-    // const message = `Hi ${profileName}, I'd like to connect and discuss potential opportunities. Looking forward to hearing from you!`;
-    // await humanType(page, messageInputSelector, message);
-    // console.log("📝 Message typed");
-    // Step 5️⃣ — Locate message input (and optional subject)
+    await humanDelay('general');
     const messageInputSelector = "div.msg-form__contenteditable";
     const messageInput = page.locator(messageInputSelector);
     await messageInput.waitFor({ state: "visible", timeout: 10000 });
-
-    // 🔹 Check if "Subject (optional)" field exists
     const subjectSelector = "input[placeholder='Subject (optional)']";
     const subjectInput = page.locator(subjectSelector);
-
     try {
       const subjectVisible = await subjectInput.isVisible({ timeout: 2000 });
       if (subjectVisible) {
@@ -1838,7 +1964,7 @@ async function sendMessageToProfile(page, url) {
           subjectSelector,
           "Regarding a potential opportunity"
         );
-        await randomDelay(500, 1000);
+        await humanDelay('general');
         console.log("✅ Subject typed successfully");
       } else {
         console.log("ℹ️ No subject field found — skipping subject step");
@@ -1846,13 +1972,9 @@ async function sendMessageToProfile(page, url) {
     } catch {
       console.log("ℹ️ Subject field not present — continuing to message");
     }
-
-    // Step 6️⃣ — Type message
     const message = `Hi ${profileName}, I'd like to connect and discuss potential opportunities. Looking forward to hearing from you!`;
     await humanType(page, messageInputSelector, message);
     console.log("📝 Message typed");
-
-    // Step 7️⃣ — Locate and click send button (includes all variants)
     const sendButtonLocators = [
       {
         selector: "button.msg-form__send-button",
@@ -1871,7 +1993,6 @@ async function sendMessageToProfile(page, url) {
         description: "primary artdeco send button",
       },
     ];
-
     let sendButton = null;
     for (const { selector, description } of sendButtonLocators) {
       try {
@@ -1884,18 +2005,14 @@ async function sendMessageToProfile(page, url) {
         // continue
       }
     }
-
     if (!sendButton) {
       console.log(`⛔ No Send button found for ${profileName} (${url})`);
       return;
     }
-
     await humanMouse(page, 1);
     await sendButton.click({ delay: 100 });
     console.log(`📨 Message sent to ${profileName}`);
-
-    // Step 8️⃣ — Wrap up
-    await randomDelay(2000, 4000);
+    await humanDelay('general');
     await closeAllMessageBoxes(page);
     console.log(`✅ Finished sending message to ${url}`);
   } catch (err) {
@@ -1903,38 +2020,14 @@ async function sendMessageToProfile(page, url) {
   }
 }
 
-
 /* ---------------------------
-    Text Extraction Helper
+   Send Connection Request Action (Enhanced)
 --------------------------- */
-
-async function getTextFromSelectors(page, selectors, timeout = 5000) {
-  for (const selector of selectors) {
-    try {
-      const text = await page.locator(selector).textContent({ timeout });
-      if (text && text.trim().length > 0) {
-        return text.trim();
-      }
-    } catch (err) {
-      // Silenced non-critical timeouts for cleaner logs
-      if (!err.message.includes("Timeout")) {
-        console.log(`⚠️ Text selector failed: ${selector} - ${err.message}`);
-      }
-    }
-  }
-  return null;
-}
-
-
-/* ---------------------------
-    Send Connection Request Action
---------------------------- */
-
 async function sendConnectionRequest(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await humanIdle(2000, 4000);
+    await humanDelay('profile_view');
     await closeAllMessageBoxes(page);
     let profileName = "";
     const nameSelectors = [
@@ -1970,18 +2063,16 @@ async function sendConnectionRequest(page, url) {
     );
     if (pendingWithdrawButton) {
       console.log("⚠️ Found Pending/Withdraw button, No Action needed");
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
       return;
     }
-    // Check if connect action is possible (direct or via more) before skipping
     const connectSelectors = [
       ".ph5 button:has-text('Connect')",
-      // Scoped alternatives with .last() for multi-matches
       'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
       'div[data-view-name="edge-creation-connect-action"] a',
       `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
     ];
-    const connectButton = await getVisibleLocator(page, connectSelectors, true); // Use .last() for alternatives
+    const connectButton = await getVisibleLocator(page, connectSelectors, true);
     const moreSelectors = [
       ".ph5 [aria-label='More actions']",
       'div[data-view-name="relationship-building-button"] ~ button[data-view-name="profile-overflow-button"][aria-label="More"]',
@@ -2004,19 +2095,14 @@ async function sendConnectionRequest(page, url) {
     if (degree === "unknown") {
       console.log(`⚠️ Degree unknown, but connect available - proceeding`);
     }
-    // Scoped send selectors for modal (avoids feed buttons) - Defined here for both paths
     const sendSelectors = [
-      // Primary: Scoped to connect modal/dialog
       '[role="dialog"] button[aria-label="Send without a note"]',
-      // Fallback: Text-based in modal
       'button[aria-label="Send without a note"]',
     ];
-    // Proceed with connect if available
     if (connectButton) {
       await humanMouse(page, 2);
       await connectButton.click({ delay: 100 });
       console.log("💡 Connect button clicked");
-      // Wait specifically for send button to appear and be visible
       try {
         await page.waitForSelector('button[aria-label="Send without a note"]', {
           state: "visible",
@@ -2025,36 +2111,34 @@ async function sendConnectionRequest(page, url) {
         const sendButton = page
           .locator('button[aria-label="Send without a note"]')
           .first();
+        await humanDelay('connection_request');
         await humanMouse(page, 1);
         await sendButton.click({ delay: 100 });
         console.log("✅ Connection request sent");
-        await randomDelay(2000, 4000);
+        await humanDelay('general');
       } catch (e) {
         console.log("⚠️ Send button not found after modal load");
       }
       return;
     }
-    // Fallback to More path
     if (moreButton) {
       await humanMouse(page, 2);
       await moreButton.click({ delay: 100 });
       console.log("💡 More button clicked");
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
       const dropdownSelectors = [
         ".ph5 .artdeco-dropdown__content-inner span:has-text('Connect')",
-        // Scoped to avoid multi-matches, with .last()
         'a[href^="/preload/custom-invite/"]:has(svg[id="connect-small"])',
       ];
       const connectDropdown = await getVisibleLocator(
         page,
         dropdownSelectors,
         true
-      ); // Use .last() for alternatives
+      );
       if (connectDropdown) {
         await humanMouse(page, 1);
         await connectDropdown.click({ delay: 100 });
         console.log("💡 Connect from dropdown clicked");
-        // Wait specifically for send button to appear and be visible
         try {
           await page.waitForSelector(
             'button[aria-label="Send without a note"]',
@@ -2063,10 +2147,11 @@ async function sendConnectionRequest(page, url) {
           const sendButton = page
             .locator('button[aria-label="Send without a note"]')
             .first();
+          await humanDelay('connection_request');
           await humanMouse(page, 1);
           await sendButton.click({ delay: 100 });
           console.log("✅ Connection request sent");
-          await randomDelay(2000, 4000);
+          await humanDelay('general');
         } catch (e) {
           console.log("⚠️ Send button not found after modal load");
         }
@@ -2084,19 +2169,16 @@ async function sendConnectionRequest(page, url) {
   }
 }
 
-/* ------------------------------------------------------
-    Navigate to Own Profile and Check Verification Status
---------------------------------------------------------- */
+/* ---------------------------
+   Navigate to Own Profile and Check Verification Status (Enhanced)
+--------------------------- */
 async function navigateToOwnProfileAndCheckStatus(page) {
   console.log("👤 Navigating to own profile and checking status...");
   try {
-    // Wait for feed to load after login
     await page
       .waitForURL("https://www.linkedin.com/feed/", { timeout: 60000 })
       .catch(() => console.log("⚠️ Feed not reached, proceeding..."));
-    await humanIdle(2000, 4000);
-
-    // Click "Me" menu button
+    await humanIdle();
     const meSelectors = [
       "button[aria-label='Me']",
       "button[aria-label*='Me']",
@@ -2116,7 +2198,6 @@ async function navigateToOwnProfileAndCheckStatus(page) {
     }
     if (!meButton) {
       console.log("⚠️ No 'Me' button found, trying alternative...");
-      // Alternative: Click on avatar
       const avatarSelectors = [
         "img.global-nav__me-photo",
         "img[alt*='Profile photo']",
@@ -2128,7 +2209,7 @@ async function navigateToOwnProfileAndCheckStatus(page) {
             await humanMouse(page, 2);
             await avatar.click({ delay: 100 });
             console.log(`✅ Clicked avatar with selector: ${selector}`);
-            meButton = avatar; // Treat as successful
+            meButton = avatar;
             break;
           }
         } catch (err) {
@@ -2140,12 +2221,10 @@ async function navigateToOwnProfileAndCheckStatus(page) {
       await humanMouse(page, 2);
       await meButton.click({ delay: 100 });
       console.log("✅ Opened user menu");
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
     } else {
       throw new Error("Failed to open user menu");
     }
-
-    // Click "View profile" link
     const viewProfileSelectors = [
       "a:has-text('View profile')",
       "a[href*='/in/']",
@@ -2170,23 +2249,15 @@ async function navigateToOwnProfileAndCheckStatus(page) {
       await humanMouse(page, 1);
       await viewProfileLink.click({ delay: 100 });
       console.log("✅ Navigated to own profile");
-      await randomDelay(2000, 4000);
+      await humanDelay('general');
     } else {
       throw new Error("Failed to find 'View profile' link");
     }
-
-    // Now check verification status on own profile
-    await humanIdle(2000, 4000);
+    await humanIdle();
     let profileName = "Unknown User";
-
-    // Universal selectors for name that work for both structures
-    // Structure 1: h1 inside a[aria-label] (legacy/older UI)
-    // Structure 2: p inside div[data-view-name="profile-top-card-verified-badge"] (modern/verified UI)
     const nameLocators = [
-      // For Structure 1
       "a[aria-label] h1",
       'a[href*="/in/"] h1',
-      // For Structure 2
       'div[data-view-name="profile-top-card-verified-badge"] p',
       'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
     ];
@@ -2202,11 +2273,6 @@ async function navigateToOwnProfileAndCheckStatus(page) {
               .locator(selector)
               .textContent({ timeout: 10000 })
               .then((text) => text.trim())) || "";
-        } else if (selector === "a[aria-label]") {
-          nameText =
-            (await page
-              .locator(selector)
-              .getAttribute("aria-label", { timeout: 10000 })) || "";
         } else {
           nameText =
             (await page
@@ -2229,10 +2295,6 @@ async function navigateToOwnProfileAndCheckStatus(page) {
         console.log(`⚠️ Name locator ${selector} failed: ${err.message}`);
       }
     }
-
-    // Universal selectors for verification badge that work for both structures
-    // Structure 1: svg[data-test-icon="verified-medium"]
-    // Structure 2: svg[aria-label*="verifications"] or svg[id="verified-medium"]
     const verifiedSelectors = [
       'svg[data-test-icon="verified-medium"]',
       'svg[aria-label*="verifications"]',
@@ -2250,7 +2312,6 @@ async function navigateToOwnProfileAndCheckStatus(page) {
         console.log(`⚠️ Verified locator ${selector} failed: ${err.message}`);
       }
     }
-
     console.log(
       `Profile Status for own profile: Name: ${profileName}, Verified: ${
         isVerified ? "Yes" : "No"
@@ -2262,19 +2323,16 @@ async function navigateToOwnProfileAndCheckStatus(page) {
     );
   }
 }
+
 /* ---------------------------
-    Like Random Post from User's Activity
+    Like Random Post from User's Activity (Enhanced)
 --------------------------- */
-
-
 async function likeRandomUserPost(page, url) {
   console.log(`🌐 Visiting: ${url} to like a random post`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await randomDelay(2000, 4000);
-    await humanScroll(page, 2); // Gentle scroll to reveal activity section
-
-    // Find and click "Show all" link in Activity section
+    await humanDelay('profile_view');
+    await humanScroll(page, 2);
     const showAllSelectors = [
       'a[aria-label="Show all"]',
       'a:has-text("Show all")',
@@ -2288,44 +2346,14 @@ async function likeRandomUserPost(page, url) {
       console.log(`⚠️ "Show all" link not found for ${url}, skipping`);
       return;
     }
-
     console.log(`🔍 Found "Show all" - clicking to view activity...`);
     await humanMouse(page, 2);
     await showAllLink.click({ delay: 100 });
-    
-    // Wait for navigation to activity page
     await page.waitForURL(/\/recent-activity\/all\/$/, { timeout: 10000 }).catch(() => console.log(`⚠️ Activity URL not reached, proceeding...`));
-    await randomDelay(6000, 8000); // Increased wait for activity page load to ensure DOM stability
-
-    // Wait for post containers to load (key fix for async loading)
-    const postSelectors = [
-      '.feed-shared-update-v2',
-      '.occludable-update',
-      '[data-urn*="urn:li:activity:"]',
-      '.update-components-actor',
-      '.feed-shared-actor'
-    ];
-    let postLoaded = false;
-    // for (const selector of postSelectors) {
-    //   try {
-    //     await page.waitForSelector(selector, { state: 'visible', timeout: 15000 });
-    //     console.log(`✅ Post container loaded using selector: ${selector}`);
-    //     postLoaded = true;
-    //     break;
-    //   } catch (err) {
-    //     console.log(`⚠️ Post selector ${selector} timed out`);
-    //   }
-    // }
-    if (!postLoaded) {
-      console.log(`⚠️ No post containers loaded for ${url}, likely empty activity`);
-    }
-
-    // Single gentle scroll to trigger any lazy loading without retry loop
+    await humanDelay('general');
     await humanScroll(page, 3);
-    await humanIdle(3000, 5000); // Additional idle for rendering
+    await humanIdle();
     await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => console.log(`⚠️ Network idle not reached, proceeding...`));
-
-    // Improved empty activity state check: Require specific text for confirmation
     const emptyStateSelectors = [
       { selector: 'div[data-test-id="empty-state"]', textCheck: 'No recent activity' },
       { selector: '.scaffold-layout__empty-state', textCheck: 'No recent activity' },
@@ -2349,78 +2377,66 @@ async function likeRandomUserPost(page, url) {
           }
         }
       } catch (err) {
-        // Timeout is fine, continue
+        // Timeout is fine
       }
     }
     if (isEmpty) {
       return;
     }
-
-    // Single check for like buttons after enhanced load (no retry loop)
     const likeSelector = 'button[aria-label*="Like"]';
     const potentialButtons = await page.locator(likeSelector).all();
     console.log(`🔍 Searched selector "${likeSelector}": found ${potentialButtons.length} potential buttons`);
-
-    // Enhanced filtering with detailed debug logs
     const visibleUnliked = [];
     let visibleCount = 0;
     let unlikedCount = 0;
     let pressedCount = 0;
     for (const btn of potentialButtons) {
       try {
-        if (await btn.isVisible({ timeout: 3000 })) { // Increased timeout for visibility
+        if (await btn.isVisible({ timeout: 3000 })) {
           visibleCount++;
-          console.log(`   - Button ${visibleCount} is visible`);
+          console.log(` - Button ${visibleCount} is visible`);
           const ariaLabel = await btn.getAttribute('aria-label') || '';
-          console.log(`     Aria-label: "${ariaLabel}"`);
+          console.log(` Aria-label: "${ariaLabel}"`);
           if (ariaLabel.toLowerCase().includes('like') && !ariaLabel.toLowerCase().includes('unlike')) {
             unlikedCount++;
-            console.log(`       - Passes label filter (unliked)`);
-            // Additional check for pressed state
+            console.log(` - Passes label filter (unliked)`);
             const pressed = await btn.getAttribute('aria-pressed');
-            console.log(`       - Aria-pressed: "${pressed}"`);
+            console.log(` - Aria-pressed: "${pressed}"`);
             const isActive = await btn.evaluate(el => el.classList && el.classList.contains('react-button__trigger--active'));
-            console.log(`       - Is active class: ${isActive}`);
+            console.log(` - Is active class: ${isActive}`);
             if (pressed !== 'true' && !isActive) {
               visibleUnliked.push(btn);
-              console.log(`         ✅ Fully unliked and ready`);
+              console.log(` ✅ Fully unliked and ready`);
             } else {
               pressedCount++;
-              console.log(`         ❌ Excluded: pressed=${pressed} or active=${isActive}`);
+              console.log(` ❌ Excluded: pressed=${pressed} or active=${isActive}`);
             }
           } else {
-            console.log(`     ❌ Excluded: contains "unlike" or no "like"`);
+            console.log(` ❌ Excluded: contains "unlike" or no "like"`);
           }
         } else {
-          console.log(`   - Button skipped: not visible`);
+          console.log(` - Button skipped: not visible`);
         }
       } catch (err) {
         console.log(`⚠️ Visibility/attribute check failed for button: ${err.message}`);
       }
     }
     console.log(`📊 Filter summary: ${potentialButtons.length} total -> ${visibleCount} visible -> ${unlikedCount} unliked by label -> ${visibleUnliked.length} fully unliked (excluded ${pressedCount} pressed/active)`);
-
     if (visibleUnliked.length === 0) {
       console.log(`⚠️ No unliked like buttons found for ${url}, skipping`);
-      // Optional: Log total liked buttons for debug
       const likedSelector = 'button[aria-label*="Unlike"]';
       const likedCount = await page.locator(likedSelector).count();
       console.log(`ℹ️ Debug: Found ${likedCount} already liked ("Unlike") buttons`);
       return;
     }
-
-    // Click the first unliked button (no random selection)
     const button = visibleUnliked[0];
     console.log(`🎯 Selected first like button of ${visibleUnliked.length} to click`);
-
-    // Human-like interaction
     await humanMouse(page, 2);
     await button.scrollIntoViewIfNeeded();
-    await randomDelay(800, 1500);
+    await humanDelay('general');
     await button.click({ delay: 100 });
     console.log(`👍 Liked first post on ${url}`);
-    await humanIdle(2000, 4000);
-
+    await humanIdle();
     console.log(`✅ Finished liking post on ${url}`);
     console.log("-------------------------------");
   } catch (err) {
@@ -2428,24 +2444,21 @@ async function likeRandomUserPost(page, url) {
   }
 }
 
-
 /* ---------------------------
-    Withdraw All Follows
+   Withdraw All Follows (Enhanced)
 --------------------------- */
 async function withdrawAllFollows(page) {
   console.log("🚫 Starting to withdraw all follow requests...");
   try {
     await page.goto("https://www.linkedin.com/mynetwork/network-manager/people-follow/following/", { waitUntil: "domcontentloaded", timeout: 60000 });
     console.log("✅ Navigated to Following page");
-    await randomDelay(2000, 4000);
-
-    // Scroll to load more followers if needed (infinite scroll handling)
+    await humanDelay('general');
     let previousHeight = 0;
     let loadAttempts = 0;
     const maxLoadAttempts = 10;
     while (loadAttempts < maxLoadAttempts) {
-      await humanScroll(page, 2);  // Gentle scroll down
-      await randomDelay(1000, 2000);
+      await humanScroll(page, 2);
+      await humanDelay('general');
       const currentHeight = await page.evaluate(() => document.body.scrollHeight);
       if (currentHeight === previousHeight) {
         console.log("📜 No more content to load");
@@ -2455,8 +2468,6 @@ async function withdrawAllFollows(page) {
       loadAttempts++;
       console.log(`📜 Loaded more content (attempt ${loadAttempts}/${maxLoadAttempts})`);
     }
-
-    // Find all unfollow buttons (initial query)
     const unfollowSelectors = [
       'button[aria-label*="Click to stop following"]',
       'button[aria-label*="Unfollow"]'
@@ -2473,19 +2484,14 @@ async function withdrawAllFollows(page) {
         console.log(`⚠️ Unfollow selector failed: ${selector} - ${err.message}`);
       }
     }
-
     if (unfollowButtons.length === 0) {
       console.log("⚠️ No unfollow buttons found on the page");
       return;
     }
-
     console.log(`🔄 Unfollowing ${unfollowButtons.length} people one by one...`);
-    // Process in original order; no inner refresh to avoid index shifts
-    // Alternative: Reverse loop if list re-renders shift indices: for (let i = unfollowButtons.length - 1; i >= 0; i--)
     for (let i = 0; i < unfollowButtons.length; i++) {
       const button = unfollowButtons[i];
       try {
-        // Check if still visible (handles stale or removed)
         if (!(await button.isVisible({ timeout: 3000 }))) {
           console.log(`⚠️ Button ${i + 1} no longer visible (skipped)`);
           continue;
@@ -2494,8 +2500,6 @@ async function withdrawAllFollows(page) {
         await humanMouse(page, 1);
         await button.click({ delay: 100 });
         console.log(`💥 Unfollow initiated for person ${i + 1}/${unfollowButtons.length}`);
-
-        // Wait for and confirm modal
         const confirmSelectors = [
           '[data-test-modal] button[data-test-dialog-primary-btn]',
           'div[role="dialog"] button:has-text("Unfollow")',
@@ -2510,7 +2514,7 @@ async function withdrawAllFollows(page) {
               break;
             }
           } catch (err) {
-            // Silently skip timeout
+            // Silently skip
           }
         }
         if (confirmButton) {
@@ -2520,40 +2524,29 @@ async function withdrawAllFollows(page) {
         } else {
           console.log(`⚠️ Confirm button not found for person ${i + 1}, skipping confirmation`);
         }
-
-        // Random delay between actions to mimic human behavior
-        const delay = Math.floor(Math.random() * 3000) + 2000;  // 2-5 seconds
-        console.log(`⏸️ Waiting ${Math.round(delay / 1000)} seconds before next...`);
-        await page.waitForTimeout(delay);
-
-        // NO REFRESH HERE: Prevents index shifting that causes skips (e.g., clicking 1,3,5,7 instead of 1-8)
-        // If list grows/shrinks unexpectedly, the visibility check above handles skips safely
+        const delay = Math.floor(Math.random() * 3000) + 2000; // 2-5s, but use humanDelay for variety
+        await humanDelay('withdraw'); // Use withdraw dist for inter-action
       } catch (err) {
         console.log(`⚠️ Failed to unfollow person ${i + 1}: ${err.message}`);
-        await randomDelay(1000, 2000);
+        await humanDelay('general');
       }
     }
-
     console.log("✅ Finished withdrawing all follows");
-    await humanIdle(3000, 6000);
+    await humanIdle();
   } catch (err) {
     console.error("❌ Failed to withdraw follows:", err.message);
   }
 }
 
-
-
 /* ---------------------------
-   Withdraw All Sent Connection Requests
+   Withdraw All Sent Connection Requests (Enhanced)
 --------------------------- */
 async function withdrawAllSentRequests(page) {
   console.log("🚫 Starting to withdraw all sent connection requests...");
   try {
     await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/sent/", { waitUntil: "domcontentloaded", timeout: 60000 });
     console.log("✅ Navigated to Sent Invitations page");
-    await randomDelay(2000, 4000);
-
-    // Ensure "Sent" tab is active
+    await humanDelay('general');
     const sentTabSelectors = [
       'button[aria-current="true"]:has-text("Sent")',
       'button:has-text("Sent")'
@@ -2561,23 +2554,20 @@ async function withdrawAllSentRequests(page) {
     const sentTab = await getVisibleLocator(page, sentTabSelectors);
     if (sentTab && !(await sentTab.getAttribute('aria-current') === 'true')) {
       await sentTab.click({ delay: 100 });
-      await randomDelay(1000, 2000);
+      await humanDelay('general');
     }
-
-    // Scroll to load more invitations if needed (infinite scroll + "Load more")
     let previousHeight = 0;
     let loadAttempts = 0;
-    const maxLoadAttempts = 15;  // Increased for potentially more invites
+    const maxLoadAttempts = 15;
     while (loadAttempts < maxLoadAttempts) {
-      // Check and click "Load more" if visible
       const loadMoreButton = page.locator('button:has-text("Load more")').first();
       if (await loadMoreButton.isVisible({ timeout: 3000 })) {
         await loadMoreButton.click({ delay: 100 });
         console.log("📜 Clicked 'Load more'");
-        await randomDelay(2000, 4000);
+        await humanDelay('general');
       }
-      await humanScroll(page, 2);  // Gentle scroll down
-      await randomDelay(1000, 2000);
+      await humanScroll(page, 2);
+      await humanDelay('general');
       const currentHeight = await page.evaluate(() => document.body.scrollHeight);
       if (currentHeight === previousHeight) {
         console.log("📜 No more content to load");
@@ -2587,8 +2577,6 @@ async function withdrawAllSentRequests(page) {
       loadAttempts++;
       console.log(`📜 Loaded more content (attempt ${loadAttempts}/${maxLoadAttempts})`);
     }
-
-    // Find all withdraw buttons
     const withdrawSelectors = [
       'button[data-view-name="sent-invitations-withdraw-single"]:has-text("Withdraw")',
       'button:has-text("Withdraw")'
@@ -2605,19 +2593,14 @@ async function withdrawAllSentRequests(page) {
         console.log(`⚠️ Withdraw selector failed: ${selector} - ${err.message}`);
       }
     }
-
     if (withdrawButtons.length === 0) {
       console.log("⚠️ No withdraw buttons found on the page");
       return;
     }
-
     console.log(`🔄 Withdrawing ${withdrawButtons.length} requests one by one...`);
-    // Process in original order; no inner refresh to avoid index shifts
-    // Alternative: Reverse loop if list re-renders shift indices: for (let i = withdrawButtons.length - 1; i >= 0; i--)
     for (let i = 0; i < withdrawButtons.length; i++) {
       const button = withdrawButtons[i];
       try {
-        // Check if still visible (handles stale or removed)
         if (!(await button.isVisible({ timeout: 3000 }))) {
           console.log(`⚠️ Button ${i + 1} no longer visible (skipped)`);
           continue;
@@ -2626,8 +2609,6 @@ async function withdrawAllSentRequests(page) {
         await humanMouse(page, 1);
         await button.click({ delay: 100 });
         console.log(`💥 Withdraw initiated for request ${i + 1}/${withdrawButtons.length}`);
-
-        // Wait for and confirm modal
         const confirmSelectors = [
           'button[aria-label^="Withdrawn invitation sent to"]',
           'button:has-text("Withdraw")',
@@ -2642,50 +2623,39 @@ async function withdrawAllSentRequests(page) {
               break;
             }
           } catch (err) {
-            // Silently skip timeout
+            // Silently skip
           }
         }
         if (confirmButton) {
           await humanMouse(page, 1);
           await confirmButton.click({ delay: 100 });
           console.log(`✅ Confirmed withdraw for request ${i + 1}`);
-          await randomDelay(1000, 2000);  // Brief pause after confirm
+          await humanDelay('general');
         } else {
           console.log(`⚠️ Confirm button not found for request ${i + 1}, skipping confirmation`);
         }
-
-        // Random delay between actions to mimic human behavior
-        const delay = Math.floor(Math.random() * 4000) + 3000;  // 3-7 seconds (longer for invites)
-        console.log(`⏸️ Waiting ${Math.round(delay / 1000)} seconds before next...`);
-        await page.waitForTimeout(delay);
-
-        // NO REFRESH HERE: Prevents index shifting that causes skips
-        // Visibility check above handles any stale elements safely
+        await humanDelay('withdraw'); // Longer for invites
       } catch (err) {
         console.log(`⚠️ Failed to withdraw request ${i + 1}: ${err.message}`);
-        await randomDelay(1000, 2000);
+        await humanDelay('general');
       }
     }
-
     console.log("✅ Finished withdrawing all sent requests");
-    await humanIdle(4000, 8000);
+    await humanIdle();
   } catch (err) {
     console.error("❌ Failed to withdraw sent requests:", err.message);
   }
 }
 
 /* ---------------------------
-   Post Impressions Action
+   Post Impressions Action (Enhanced)
 --------------------------- */
 async function checkPostImpressions(page) {
   console.log("📊 Starting to check Post Impressions / Creator Analytics...");
-
-  // Ensure we are on Home feed
   await page
     .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
     .catch(() => {});
-  await humanIdle(800, 1800);
-
+  await humanIdle();
   const postImpressions = page
     .locator(
       `.scaffold-layout__sticky-content [aria-label*='Side Bar'] span:has-text('Post impressions')`
@@ -2699,13 +2669,12 @@ async function checkPostImpressions(page) {
     .first();
   if (await viewAllAnalytics.count()) {
     await viewAllAnalytics.click().catch(() => {});
-    await randomDelay(1500, 3500);
+    await humanDelay('general');
     await page.locator(`.pcd-analytic-view-items-container [href*='https://www.linkedin.com/analytics/creator/content']`).first().click().catch(() => {});
   }
   await page.waitForLoadState("domcontentloaded").catch(() => {});
   console.log("Opened Post Impressions / Creator Analytics");
-  await humanIdle(1200, 2400);
-
+  await humanIdle();
   const filterBtn = page.locator(
     "div[class='artdeco-card'] .analytics-libra-analytics-filter-group"
   );
@@ -2713,7 +2682,7 @@ async function checkPostImpressions(page) {
     .first()
     .click()
     .catch(() => {});
-  await humanIdle(800, 1600);
+  await humanDelay('general');
   const timeFilter = page.locator(
     `label[for='timeRange-past_28_days'] p[class='display-flex']`
   );
@@ -2723,7 +2692,7 @@ async function checkPostImpressions(page) {
       .click()
       .catch(() => {});
     console.log("Set time filter to Past 28 days");
-    await humanIdle(2000, 4000);
+    await humanIdle();
   }
   const applyBtn = page.locator(
     `div[id*='artdeco-hoverable-artdeco-gen'] div[class='artdeco-hoverable-content__content'] button[aria-label='This button will apply your selected item']`
@@ -2734,7 +2703,7 @@ async function checkPostImpressions(page) {
       .click()
       .catch(() => {});
     console.log("Applied filter");
-    await humanIdle(2000, 4000);
+    await humanIdle();
   }
   const { impressions, membersReached } = await page.evaluate(() => {
     const impressions = document
@@ -2751,21 +2720,18 @@ async function checkPostImpressions(page) {
   });
   console.log("Impressions:", impressions);
   console.log("Members reached:", membersReached);
-
-  // Final small wait to allow analytics screen to render
-  await humanIdle(2000, 4000);
-
+  await humanIdle();
   await filterBtn
     .last()
     .click()
     .catch(() => {});
-  await humanIdle(800, 1600);
+  await humanDelay('general');
   await page
     .locator(`label[for='metricType-ENGAGEMENTS']`)
     .first()
     .click()
     .catch(() => {});
-  await humanIdle(800, 1600);
+  await humanDelay('general');
   await page
     .locator(
       "div[id*='artdeco-hoverable-artdeco-gen'] button[aria-label='This button will apply your selected item']"
@@ -2773,23 +2739,16 @@ async function checkPostImpressions(page) {
     .nth(1)
     .click()
     .catch(() => {});
-  await humanIdle(1000, 3000);
-  // Wait for the analytics card container on the page to be fully visible and loaded
+  await humanDelay('general');
   await page.waitForSelector(
     "section.artdeco-card.member-analytics-addon-card__base-card",
     { timeout: 15000 }
   );
-
-  // Optional wait to ensure dynamic content loads fully
   await page.waitForTimeout(3000);
-
   const metrics = await page.evaluate(() => {
-    // Collect all metric list items
     const items = Array.from(
       document.querySelectorAll(".member-analytics-addon__cta-list-item")
     );
-
-    // Helper function to get the count text by title matching (like 'Impressions', 'Reactions')
     const getTextByTitle = (title) => {
       const item = items.find(
         (li) =>
@@ -2797,14 +2756,12 @@ async function checkPostImpressions(page) {
             .querySelector(".member-analytics-addon__cta-list-item-title")
             ?.innerText.trim() === title
       );
-      // Extract text inside the count container's text span
       return item
         ?.querySelector(
           ".member-analytics-addon__cta-list-item-count-container .member-analytics-addon__cta-list-item-text"
         )
         ?.innerText.trim();
     };
-
     return {
       reactions: getTextByTitle("Reactions"),
       comments: getTextByTitle("Comments"),
@@ -2813,30 +2770,24 @@ async function checkPostImpressions(page) {
       sendsOnLinkedIn: getTextByTitle("Sends on LinkedIn"),
     };
   });
-
   console.log(`Reactions: ${metrics.reactions}`);
   console.log(`Comments: ${metrics.comments}`);
   console.log(`Reposts: ${metrics.reposts}`);
   console.log(`Saves: ${metrics.saves}`);
   console.log(`Sends on LinkedIn: ${metrics.sendsOnLinkedIn}`);
-  await humanIdle(2000, 4000);
-
+  await humanIdle();
   console.log("✅ Finished checking Post Impressions / Creator Analytics");
 }
 
-
 /* ---------------------------
-   Scrape Connections Action
+   Scrape Connections Action (Enhanced)
 --------------------------- */
 async function scrapeConnections(page) {
   console.log("🔎 Scraping first 20 connections...");
-
-  // Ensure we are on Home feed first
   await page
     .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
     .catch(() => {});
-  await humanIdle(2000, 4000);
-
+  await humanIdle();
   console.log("Navigating to My Network -> Connections...");
   const myNetwork = `nav li [href*='https://www.linkedin.com/mynetwork']`;
   await page
@@ -2844,21 +2795,14 @@ async function scrapeConnections(page) {
     .click()
     .catch(() => {});
   await page.waitForLoadState("domcontentloaded").catch(() => {});
-  await humanIdle(3000, 6000);
-  // Click on Connections link
+  await humanIdle();
   await page.locator(`nav ul [aria-label*='connections']`).first().click();
-  await humanIdle(2000, 4000);
-
-  // Wait for connections to load
+  await humanIdle();
   await page.waitForLoadState("domcontentloaded").catch(() => {});
-  await randomDelay(4000, 6000);
-
-  // Wait for connections list to load
+  await humanDelay('general');
   await page.waitForSelector('a[data-view-name="connections-profile"]', {
     timeout: 10000,
   });
-
-  // Grab all connections first
   const allConnections = await page.$$eval(
     'a[data-view-name="connections-profile"]',
     (els) =>
@@ -2871,73 +2815,30 @@ async function scrapeConnections(page) {
         })
         .filter((c) => c.name && c.url)
   );
-
-  // Take only first 20
   const first20Connections = allConnections.slice(0, 20);
-
-  // Print first 20 connections
   first20Connections.forEach(({ name, url }, idx) => {
     console.log(`${idx + 1}. ${name} : ${url}`);
     console.log("-------------------------------");
   });
-
-  // Print total connections scraped
   console.log(`\n✅ Total connections scraped: ${allConnections.length}`);
-
-  return first20Connections; // Optional: return the data for further use
+  return first20Connections;
 }
 
-
-
-// Selectors for Profile Image from First HTML Snippet
-// (Targets the img inside .profile-photo-edit__preview or .pv-top-card__edit-photo)
-const firstImageSelectors = [
-  'img.profile-photo-edit__preview',
-  '.pv-top-card__edit-photo img',
-  '.profile-photo-edit.pv-top-card__edit-photo img'
-];
-
-// Selectors for Profile Image from Second HTML Snippet
-// (Targets the img inside [data-view-name="profile-top-card-member-photo"] or figure[data-view-name="image"])
-const secondImageSelectors = [
-  '[data-view-name="profile-top-card-member-photo"] img',
-  'figure[data-view-name="image"] img',
-  'img[data-loaded="true"]'
-];
-
-// Combined Robust Selector for Profile Image (works for both structures)
-const combinedProfileImageSelector = [
-  'img.profile-photo-edit__preview',
-  '.pv-top-card__edit-photo img',
-  '.profile-photo-edit.pv-top-card__edit-photo img',
-  '[data-view-name="profile-top-card-member-photo"] img',
-  'figure[data-view-name="image"] img',
-  'img[data-loaded="true"]'
-].join(', ');
-
-// Usage Example in grabProfileImage Function
+/* ---------------------------
+   Grab Profile Image (Enhanced)
+--------------------------- */
 async function grabProfileImage(page) {
   console.log("👤 Grabbing profile image...");
-
-  // Ensure we are on Home feed
   await page
     .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60000 })
     .catch(() => {});
-  await humanIdle(2000, 4000);
-
-  // Click on profile image to open menu
+  await humanIdle();
   await page.locator(`img.global-nav__me-photo, img[alt*="Profile photo"], figure[data-view-name="image"] img`).first().click().catch(() => {});
-
   await page.waitForLoadState("domcontentloaded").catch(() => {});
-  await humanIdle(2000, 4000);
-  
-  // Click "View profile" to navigate to own profile
+  await humanIdle();
   await page.locator(`a:has-text('View profile'), a[href*='/in/']`).first().click().catch(() => {});
-  
   await page.waitForLoadState("domcontentloaded").catch(() => {});
-  await humanIdle(2000, 4000);
-
-  // Updated robust selectors for name using provided locators
+  await humanIdle();
   const nameLocators = [
     { selector: "h1", description: "h1 tag" },
     { selector: 'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p', description: "verified badge button p" },
@@ -2946,7 +2847,6 @@ async function grabProfileImage(page) {
     { selector: 'div[data-view-name="profile-top-card-verified-badge"] p', description: "verified badge p" },
     { selector: 'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type', description: "verified badge first p" },
   ];
-
   let nameText = await getTextFromSelectors(page, nameLocators.map(loc => loc.selector), 10000);
   if (!nameText) {
     console.log("⚠️ No name found with provided locators");
@@ -2954,11 +2854,16 @@ async function grabProfileImage(page) {
   } else {
     console.log("Profile Name:", nameText);
   }
-
-  // Updated robust selector for profile image using combined selectors
+  const combinedProfileImageSelector = [
+    'img.profile-photo-edit__preview',
+    '.pv-top-card__edit-photo img',
+    '.profile-photo-edit.pv-top-card__edit-photo img',
+    '[data-view-name="profile-top-card-member-photo"] img',
+    'figure[data-view-name="image"] img',
+    'img[data-loaded="true"]'
+  ].join(', ');
   const profileImage = page.locator(combinedProfileImageSelector).first();
   await profileImage.waitFor({ state: "visible", timeout: 20000 }).catch(() => console.log("⚠️ Profile image not found or timed out"));
-  
   let imageUrl = await profileImage.getAttribute("src");
   if (!imageUrl) {
     console.log("⚠️ No image URL found with src attribute");
@@ -2966,427 +2871,19 @@ async function grabProfileImage(page) {
   } else {
     console.log("Profile Image URL:", imageUrl);
   }
-
-  return { name: nameText, imageUrl }; // Optional: return the data for further use
+  return { name: nameText, imageUrl };
 };
-
-async function applyToJobs(page, keywords = [], experience = "2-5", maxJobs = 10) {
-  console.log(`🎯 Starting job application automation: Applying to all Easy Apply jobs (Past 24 hours)`);
-  try {
-    // Step 2: Navigate to Jobs
-    console.log("🔍 Navigating to Jobs...");
-    const jobsNavSelector = 'a[aria-label="Jobs, 0 new notifications"], a[aria-label*="Jobs"]';
-    const jobsLink = page.locator(jobsNavSelector).first();
-    if (await jobsLink.isVisible({ timeout: 5000 })) {
-      await humanMouse(page, 2);
-      await jobsLink.click({ delay: 100 });
-      await page.waitForURL(/linkedin\.com\/jobs/, { timeout: 10000 });
-      console.log("✅ Landed on Jobs page");
-    } else {
-      console.log("⚠️ Jobs nav not found, direct goto...");
-      await page.goto("https://www.linkedin.com/jobs/", { waitUntil: "domcontentloaded", timeout: 60000 });
-    }
-    await randomDelay(2000, 4000); // Random delay before search
-    // Step 3: Human-like search for "Software testing Jobs in Hyderabad" (Fixed locator for strict mode)
-    console.log("🔎 Performing human-like job search...");
-    // More precise locator: Use getByRole for the active combobox input
-    const searchInput = page.getByRole('combobox', { name: /Search by title, skill, or company/ });
-    await searchInput.waitFor({ state: "visible", timeout: 10000 });
-    await humanMouse(page, 1);
-    await searchInput.click({ delay: 100 });
-    await randomDelay(800, 1500); // Pause before typing
-    const query = "Software testing Jobs in Hyderabad";
-    await humanType(page, searchInput, query); // Human typing (locator is now single element)
-    await randomDelay(500, 1000);
-    await searchInput.press("Enter");
-    await randomDelay(2000, 4000); // Wait for results
-    // Step 4: Apply "Past 24 hours" filter
-    console.log("⏰ Applying 'Past 24 hours' filter...");
-    const timeFilterBtn = page.locator("#searchFilter_timePostedRange, [data-test-id='job-search-time-filter']");
-    await timeFilterBtn.click();
-    await randomDelay(300, 800);
-    const past24hOption = page.locator("label:has-text('Past 24 hours'), [for*='timePostedRange-past_24']");
-    await past24hOption.click();
-    await randomDelay(200, 500);
-    const showResultsBtn = page.locator("button:has-text('Show results'), #searchFilter_apply").first();
-    await showResultsBtn.click();
-    await randomDelay(2000, 4000);
-    // Step 5: Enable Easy Apply filter
-    console.log("⚡ Enabling Easy Apply filter...");
-    const easyApplyBtn = page.locator("#searchFilter_applyWithLinkedin, [data-test-id='job-search-easy-apply-filter']");
-    await easyApplyBtn.click();
-    await randomDelay(500, 1000);
-   
-    // Step 6: Scrape and apply to all Easy Apply jobs
-    console.log("📋 Scraping and applying to Easy Apply jobs...");
-    const appliedCount = { total: 0 };
-    let currentPage = 1;
-    let hasNext = true;
-    let scrapedJobs = [];
-    while (hasNext) {
-      console.log(`➡️ Processing page ${currentPage}...`);
-      // Human scroll through results
-      await page.evaluate(async () => {
-        const container = document.querySelector(".jobs-search-results-list, .semantic-search-results-list");
-        if (!container) return;
-        const distance = 400;
-        let position = 0;
-        while (position < container.scrollHeight) {
-          container.scrollBy(0, distance);
-          position += distance;
-          const delay = Math.floor(Math.random() * 1200) + 600; // 600-1800ms
-          await new Promise((r) => setTimeout(r, delay));
-          if (Math.random() < 0.15) { // 15% chance longer pause
-            await new Promise((r) => setTimeout(r, 4000));
-          }
-        }
-      });
-      await randomDelay(1000, 3000);
-      // Updated scraping: Use page.locator and .nth(i) for stable querying without ElementHandles
-      const jobListLocator = page.locator(".semantic-search-results-list__list-item");
-      const jobCount = await jobListLocator.count();
-      console.log(`🔍 Found ${jobCount} job items on page ${currentPage}`);
-      for (let i = 0; i < jobCount; i++) {
-        // Scoped locators for the i-th job item
-        const itemLocator = jobListLocator.nth(i);
-        const title = await itemLocator.locator(".artdeco-entity-lockup__title span[aria-hidden='true']").textContent({ timeout: 5000 }).catch(() => null);
-        const company = await itemLocator.locator(".artdeco-entity-lockup__subtitle div").textContent({ timeout: 5000 }).catch(() => null);
-        const locationText = await itemLocator.locator(".artdeco-entity-lockup__caption div").textContent({ timeout: 5000 }).catch(() => null);
-        const posted = await itemLocator.locator("time").textContent({ timeout: 5000 }).catch(() => null);
-        const link = await itemLocator.locator("a.job-card-job-posting-card-wrapper__card-link").getAttribute("href", { timeout: 5000 }).catch(() => null);
-        // Check Easy Apply using locator
-        const easyApplyElements = await itemLocator.locator(".job-card-job-posting-card-wrapper__footer-item").all();
-        let easyApply = false;
-        for (const el of easyApplyElements) {
-          const text = await el.textContent({ timeout: 3000 }).catch(() => "");
-          if (text && text.includes("Easy Apply")) {
-            easyApply = true;
-            break;
-          }
-        }
-        if (!easyApply) {
-          console.log(`⏭️ Skipping job ${i+1} (Title: ${title || 'Unknown'} at ${company || 'Unknown'}): No Easy Apply available`);
-          continue;
-        }
-        if (!title || !link) {
-          console.log(`⏭️ Skipping job ${i+1} (Title: ${title || 'Missing'} at ${company || 'Unknown'}): Missing title or job link`);
-          continue;
-        }
-        scrapedJobs.push({ title, company, location: locationText, posted, link });
-        // Visit job page to apply
-        console.log(`🔍 Applying to job ${i+1}/${jobCount}: ${title} at ${company}`);
-        await page.goto(link, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await randomDelay(5000, 10000); // Shorter simulate reading to speed up
-        // Apply via Easy Apply - Reliable selector for 2025
-        const jobEasyApplyBtn = page.locator('button.jobs-apply-button:has-text("Easy Apply"), button[aria-label*="Easy Apply to"], button[data-test-apply-button="true"]').first();
-        if (await jobEasyApplyBtn.isVisible({ timeout: 10000 })) {
-          await humanMouse(page, 1);
-          await jobEasyApplyBtn.click({ delay: 100 });
-          console.log("✅ Easy Apply modal opened");
-          await randomDelay(2000, 4000);
-          // Handle multi-step form: Fill contact info step (first modal)
-          // Use getByLabel for robust field selection (works with labels in HTML)
-          // First name (required, empty)
-          const firstNameInput = page.getByLabel("First name");
-          if (await firstNameInput.isVisible({ timeout: 5000 })) {
-            await firstNameInput.fill("Tanuja"); // Use from profile or default
-            console.log("📝 Filled first name");
-          }
-          // Last name
-          const lastNameInput = page.getByLabel("Last name");
-          if (await lastNameInput.isVisible({ timeout: 5000 })) {
-            await lastNameInput.fill("Peddi");
-            console.log("📝 Filled last name");
-          }
-          // Phone country code select (default "Select an option" -> choose India)
-          const phoneCountrySelect = page.getByLabel("Phone country code");
-          if (await phoneCountrySelect.isVisible({ timeout: 5000 })) {
-            await phoneCountrySelect.selectOption("India (+91)");
-            console.log("📞 Selected phone country: India");
-          }
-          // Mobile phone number
-          const phoneInput = page.getByLabel("Mobile phone number");
-          if (await phoneInput.isVisible({ timeout: 5000 })) {
-            await humanType(page, phoneInput, "1234567890");
-            console.log("📞 Filled mobile phone");
-          }
-          // Email (pre-filled select, skip or verify)
-          const emailSelect = page.getByLabel("Email address");
-          if (await emailSelect.isVisible({ timeout: 3000 })) {
-            // Assume pre-selected, no action needed
-            console.log("📧 Email pre-filled");
-          }
-          // Location (city)
-          const locationInput = page.getByLabel("Location (city)");
-          if (await locationInput.isVisible({ timeout: 5000 })) {
-            await locationInput.fill("Hyderabad, Telangana, India");
-            console.log("📍 Filled location");
-          }
-          // Click Next to proceed (from HTML: aria-label="Continue to next step", text="Next")
-          const nextBtn = page.getByRole("button", { name: "Next", exact: true }).or(page.locator('button[aria-label="Continue to next step"]')).first();
-          if (await nextBtn.isVisible({ timeout: 10000 })) {
-            await humanMouse(page, 1);
-            await nextBtn.click({ delay: 100 });
-            console.log("➡️ Clicked Next - Proceeding to resume step");
-            await randomDelay(2000, 4000);
-            // Next step: Resume upload (common after contact info)
-            // Look for file input with label "Upload your resume" or similar
-            const resumeInput = page.locator('input[type="file"][accept*="pdf"], input[type="file"]:has([for*="resume"]), input[type="file"]').first();
-            if (await resumeInput.isVisible({ timeout: 5000 })) {
-              // Upload placeholder resume (update path to your file)
-              await resumeInput.setInputFiles("path/to/your-resume.pdf"); // e.g., "./resume.pdf"
-              console.log("📎 Uploaded resume");
-              await randomDelay(3000, 5000); // Wait for upload
-            } else {
-              console.log("⚠️ No resume upload found - skipping");
-            }
-            // Possible additional questions - Skip if present
-            const skipBtn = page.getByRole("button", { name: "Skip", exact: true }).or(page.locator('button:has-text("Skip for now")')).first();
-            if (await skipBtn.isVisible({ timeout: 3000 })) {
-              await skipBtn.click();
-              console.log("❓ Skipped questions");
-              await randomDelay(1000, 2000);
-            }
-            // Final Submit (after resume/next)
-            const submitBtn = page.getByRole("button", { name: "Submit application", exact: true }).or(page.locator('button[aria-label="Submit application"]')).first();
-            if (await submitBtn.isVisible({ timeout: 10000 })) {
-              await humanMouse(page, 1);
-              await submitBtn.click({ delay: 100 });
-              console.log(`📤 Applied to: ${title}`);
-              appliedCount.total++;
-            } else {
-              console.log(`⚠️ Final Submit button not found for ${title} - Form may be incomplete`);
-            }
-          } else {
-            console.log(`⚠️ Next button not found for ${title} - Check form fields`);
-          }
-          await randomDelay(2000, 5000); // Post-apply pause
-          // Close modal if needed
-          const closeModal = page.locator('button[aria-label="Dismiss"], .artdeco-modal__dismiss').first();
-          if (await closeModal.isVisible({ timeout: 3000 })) {
-            await closeModal.click();
-          }
-        } else {
-          console.log(`⚠️ Easy Apply button not found for ${title}`);
-        }
-        // Go back to search results with explicit wait
-        await page.goBack({ waitUntil: "domcontentloaded", timeout: 10000 });
-        await randomDelay(1000, 3000);
-      }
-      // Pagination - Updated to use locator
-      const nextBtn = page.locator("button[aria-label='View next page'], #pagination-next-btn, li[role='presentation']:last-child button");
-      hasNext = await nextBtn.isVisible({ timeout: 3000 }) && !(await nextBtn.isDisabled());
-      if (hasNext) {
-        await humanMouse(page, 1);
-        await nextBtn.click();
-        await randomDelay(2000, 4000);
-        currentPage++;
-      } else {
-        hasNext = false;
-      }
-    }
-    console.log(`✅ Finished! Applied to ${appliedCount.total} Easy Apply jobs. Scraped ${scrapedJobs.length} jobs total.`);
-  } catch (err) {
-    console.error("❌ Job application failed:", err.message);
-  }
-};
-
-async function sendConnectionRequestWithNote(page, url) {
-  console.log(`🌐 Processing profile: ${url}`);
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    await humanIdle(2000, 4000);
-    await closeAllMessageBoxes(page);
-    let profileName = "";
-    const nameSelectors = [
-      "h1",
-      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
-    ];
-    const nameText = await getTextFromSelectors(page, nameSelectors);
-    if (nameText) {
-      profileName = nameText || "Friend";
-      console.log(`👤 Profile name: ${profileName}`);
-    } else {
-      console.log(`⚠️ Failed to get profile name`);
-    }
-    const acceptSelectors = [
-      ".ph5 [aria-label*='Accept']",
-      'button[aria-label^="Accept"][aria-label*="request to connect"]',
-    ];
-    const acceptButton = await getVisibleLocator(page, acceptSelectors);
-    if (acceptButton) {
-      console.log(`⛔ Skipping profile ${profileName} (${url}) - Pending acceptance`);
-      return;
-    }
-    const degree = await detectDegree(page);
-    const pendingSelectors = [
-      ".ph5 button:has-text('Pending'), .ph5 button:has-text('Withdraw')",
-      'button[aria-label^="Pending, click to withdraw invitation"]:has(svg[id="clock-small"])',
-    ];
-    const pendingWithdrawButton = await getVisibleLocator(page, pendingSelectors);
-    if (pendingWithdrawButton) {
-      console.log("⚠️ Found Pending/Withdraw button, No Action needed");
-      await randomDelay(1000, 2000);
-      return;
-    }
-    // Check if connect action is possible (direct or via more) before skipping
-    const connectSelectors = [
-      ".ph5 button:has-text('Connect')",
-      // Scoped alternatives with .last() for multi-matches
-      'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
-      'div[data-view-name="edge-creation-connect-action"] a',
-      `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
-    ];
-    const connectButton = await getVisibleLocator(page, connectSelectors, true);  // Use .last() for alternatives
-    const moreSelectors = [
-      ".ph5 [aria-label='More actions']",
-      'div[data-view-name="relationship-building-button"] ~ button[data-view-name="profile-overflow-button"][aria-label="More"]',
-      'div[data-view-name="relationship-building-button"] + a[data-view-name="profile-secondary-message"] + button[data-view-name="profile-overflow-button"]',
-    ];
-    const moreButton = await getVisibleLocator(page, moreSelectors);
-    const connectOpportunity = connectButton || moreButton;
-    if (degree === "1st") {
-      console.log(`⛔ Skipping connection request to ${profileName} (${url}) - Already connected`);
-      return;
-    }
-    if (!connectOpportunity && degree === "unknown") {
-      console.log(`⛔ Skipping connection request to ${profileName} (${url}) - No connect opportunity`);
-      return;
-    }
-    if (degree === "unknown") {
-      console.log(`⚠️ Degree unknown, but connect available - proceeding`);
-    }
-    // Prepare note message from environment variable
-    let noteMessage = process.env.CONNECTION_NOTE || `Hi ${profileName}, I'd like to connect and discuss potential opportunities. Looking forward to hearing from you!`;
-    if (noteMessage.includes('${profileName}')) {
-      noteMessage = noteMessage.replace(/\${profileName}/g, profileName);
-    }
-    // Proceed with connect if available
-    if (connectButton) {
-      await humanMouse(page, 2);
-      await connectButton.click({ delay: 100 });
-      console.log("💡 Connect button clicked");
-      // Wait for modal to load
-      try {
-        await page.waitForSelector('[role="dialog"]', { state: "visible", timeout: 30000 });
-        // Click Add a note button
-        const addNoteButton = page.locator('[aria-label="Add a note"]').first();
-        await addNoteButton.waitFor({ state: "visible", timeout: 10000 });
-        await humanMouse(page, 1);
-        await addNoteButton.click({ delay: 100 });
-        console.log("📝 Add note button clicked");
-        await randomDelay(500, 1000);
-        // Wait for input box and type message
-        const inputSelectors = [".connect-button-send-invite__custom-message-box", "#custom-message"];
-        let messageInput = null;
-        for (const selector of inputSelectors) {
-          try {
-            const input = page.locator(selector).first();
-            await input.waitFor({ state: "visible", timeout: 10000 });
-            messageInput = input;
-            break;
-          } catch (err) {
-            console.log(`⚠️ Input selector ${selector} not found, trying next`);
-          }
-        }
-        if (messageInput) {
-          await humanType(page, messageInput, noteMessage);
-          console.log("📝 Note message typed");
-          await randomDelay(500, 1000);
-          // Click Send invitation button
-          const sendButton = page.locator('[aria-label="Send invitation"]').first();
-          await sendButton.waitFor({ state: "visible", timeout: 10000 });
-          await humanMouse(page, 1);
-          await sendButton.click({ delay: 100 });
-          console.log("✅ Connection request with note sent");
-          await randomDelay(2000, 4000);
-        } else {
-          console.log("⚠️ Message input not found after adding note");
-        }
-      } catch (e) {
-        console.log("⚠️ Modal or add note elements not found after connect click:", e.message);
-      }
-      return;
-    }
-    // Fallback to More path
-    if (moreButton) {
-      await humanMouse(page, 2);
-      await moreButton.click({ delay: 100 });
-      console.log("💡 More button clicked");
-      await randomDelay(1000, 2000);
-      const dropdownSelectors = [
-        ".ph5 .artdeco-dropdown__content-inner span:has-text('Connect')",
-        // Scoped to avoid multi-matches, with .last()
-        'a[href^="/preload/custom-invite/"]:has(svg[id="connect-small"])',
-      ];
-      const connectDropdown = await getVisibleLocator(page, dropdownSelectors, true);  // Use .last() for alternatives
-      if (connectDropdown) {
-        await humanMouse(page, 1);
-        await connectDropdown.click({ delay: 100 });
-        console.log("💡 Connect from dropdown clicked");
-        // Wait for modal to load
-        try {
-          await page.waitForSelector('[role="dialog"]', { state: "visible", timeout: 30000 });
-          // Click Add a note button
-          const addNoteButton = page.locator('[aria-label="Add a note"]').first();
-          await addNoteButton.waitFor({ state: "visible", timeout: 10000 });
-          await humanMouse(page, 1);
-          await addNoteButton.click({ delay: 100 });
-          console.log("📝 Add note button clicked");
-          await randomDelay(500, 1000);
-          // Wait for input box and type message
-          const inputSelectors = [".connect-button-send-invite__custom-message-box", "#custom-message"];
-          let messageInput = null;
-          for (const selector of inputSelectors) {
-            try {
-              const input = page.locator(selector).first();
-              await input.waitFor({ state: "visible", timeout: 10000 });
-              messageInput = input;
-              break;
-            } catch (err) {
-              console.log(`⚠️ Input selector ${selector} not found, trying next`);
-            }
-          }
-          if (messageInput) {
-            await humanType(page, messageInput, noteMessage);
-            console.log("📝 Note message typed");
-            await randomDelay(500, 1000);
-            // Click Send invitation button
-            const sendButton = page.locator('[aria-label="Send invitation"]').first();
-            await sendButton.waitFor({ state: "visible", timeout: 10000 });
-            await humanMouse(page, 1);
-            await sendButton.click({ delay: 100 });
-            console.log("✅ Connection request with note sent");
-            await randomDelay(2000, 4000);
-          } else {
-            console.log("⚠️ Message input not found after adding note");
-          }
-        } catch (e) {
-          console.log("⚠️ Modal or add note elements not found after dropdown connect:", e.message);
-        }
-      }
-    } else if (degree === "unknown") {
-      console.log(`⚠️ No connect opportunity despite unknown degree - skipping`);
-    }
-    console.log(`✅ Finished processing ${profileName} (${url})`);
-  } catch (err) {
-    console.error(`❌ Failed to send connection request with note to ${url}: ${err.message}`);
-  }
-}
-
 
 /* ---------------------------
-   Main Test - Perform Action
------------------------------- */
+   Main Test - Perform Action (Enhanced loops)
+--------------------------- */
 test.describe("LinkedIn Multi-Action Script", () => {
   let browser, context, page;
-
   test.beforeAll(async () => {
     if (!process.env.LINKEDIN_EMAIL || !process.env.LINKEDIN_PASSWORD) {
       throw new Error("Set LINKEDIN_EMAIL and LINKEDIN_PASSWORD in .env");
     }
     if (!PROFILE_URLS.length) console.log("⚠️ No PROFILE_URLS provided.");
-
     browser = await chromium.launch({
       headless: false,
       args: ["--start-maximized"],
@@ -3396,7 +2893,6 @@ test.describe("LinkedIn Multi-Action Script", () => {
       fs.statSync(STORAGE_FILE).mtimeMs > Date.now() - SESSION_MAX_AGE
         ? STORAGE_FILE
         : undefined;
-
     context = await browser.newContext({
       viewport: null,
       locale: "en-US",
@@ -3405,34 +2901,30 @@ test.describe("LinkedIn Multi-Action Script", () => {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
       storageState,
     });
-
     page = await context.newPage();
     await addStealth(page);
-
     try {
       await page.goto("https://www.linkedin.com/login", {
         waitUntil: "domcontentloaded",
         timeout: 60000,
       });
       await humanMouse(page, 3);
-      await humanIdle(800, 1800);
-
+      await humanIdle();
       if (await page.locator("#username").isVisible({ timeout: 5000 })) {
         console.log("🔐 Logging in...");
         await humanType(page, "#username", process.env.LINKEDIN_EMAIL);
-        await humanIdle(600, 1600);
+        await humanIdle();
         await humanType(page, "#password", process.env.LINKEDIN_PASSWORD);
-        await humanIdle(600, 1600);
+        await humanIdle();
         await page
           .locator(`label[for='rememberMeOptIn-checkbox']`)
           .click()
           .catch(() =>
             console.log("Remember Me checkbox not found, skipping.")
           );
-        await humanIdle(600, 1600);
+        await humanIdle();
         await page.locator('button[type="submit"]').click();
-        await randomDelay(1000, 2000);
-
+        await humanDelay('general');
         const authLink = page.locator(
           'a:has-text("Verify using authenticator app")'
         );
@@ -3445,13 +2937,12 @@ test.describe("LinkedIn Multi-Action Script", () => {
             encoding: "base32",
           });
           await humanType(page, 'input[name="pin"][maxlength="6"]', token);
-          await randomDelay(700, 1400);
+          await humanDelay('general');
           await page
             .locator('#two-step-submit-button, button[type="submit"]')
             .first()
             .click();
         }
-
         await page
           .waitForURL("https://www.linkedin.com/feed/", { timeout: 60000 })
           .catch(() => console.log("⚠️ Feed not reached."));
@@ -3462,101 +2953,72 @@ test.describe("LinkedIn Multi-Action Script", () => {
       throw err;
     }
   });
-
   test.afterAll(async () => {
     if (browser) await browser.close();
   });
-
   test("Perform Action", async () => {
-  test.setTimeout(20 * 60 * 1000); // 20 minutes
-  console.log(
-    `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
-  );
-  console.log("-------------------------------");
-
-
-//   const actions = {
-//   view_feed: viewFeed,
-//   like_feed: likeFeed,
-//   check_degree: async () => {
-//     for (const url of PROFILE_URLS) await checkDegree(page, url);
-//   },
-//   send_message: async () => {
-//     for (const url of PROFILE_URLS) await sendMessage(page, url);
-//   },
-//   send_connection_request: async () => {
-//     for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
-//   },
-//   check_connection_accepted: async () => {
-//     for (const url of PROFILE_URLS)
-//       await checkConnectionAccepted(page, url);
-//   },
-//   check_reply: async () => {
-//     for (const url of PROFILE_URLS) await checkReply(page, url);
-//   },
-//   grab_replies: async () => {
-//     for (const url of PROFILE_URLS) await grabReplies(page, url);
-//   },
-//   send_follow: async () => {
-//     for (const url of PROFILE_URLS) await sendFollow(page, url);
-//   },
-//   send_follow_any: async () => {
-//     for (const url of PROFILE_URLS) await sendFollowAny(page, url);
-//   },
-//   withdraw_request: async () => {
-//     for (const url of PROFILE_URLS) await withdrawRequest(page, url);
-//   },
-//   check_own_verification: navigateToOwnProfileAndCheckStatus,
-//   send_message_premium: async () => {
-//     const isPremiumUser = await checkPremiumStatus(page);
-//     if (isPremiumUser && PROFILE_URLS.length > 0) {
-//       console.log(
-//         `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
-//       );
-//       for (const url of PROFILE_URLS) {
-//         await sendMessageToProfile(page, url);
-//         await humanIdle(3000, 6000); // Pause between profiles
-//       }
-//     } else if (!isPremiumUser) {
-//       console.log("⛔ Not a premium user. Skipping message sending.");
-//     } else {
-//       console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
-//     }
-//   },
-//   like_user_post: async () => {
-//     console.log(`👍 Liking random posts on ${PROFILE_URLS.length} user profiles...`);
-//     for (const url of PROFILE_URLS) {
-//       await likeRandomUserPost(page, url);
-//       await humanIdle(5000, 10000); // Longer pause between profiles to avoid rate limits
-//     }
-//   },
-//   withdraw_all_follows: withdrawAllFollows, // New action
-//   withdraw_all_sent_requests: withdrawAllSentRequests, // New bulk withdraw action
-//   check_post_impressions: checkPostImpressions,
-//   scrape_connections: scrapeConnections,
-//   grab_profile_image: grabProfileImage,
-//   apply_jobs: async () => {
-//   const keywords = process.env.JOB_KEYWORDS.split(",").map(k => k.trim());
-//   const experience = process.env.EXPERIENCE;
-//   const maxJobs = parseInt(process.env.MAX_JOBS);
-//   await applyToJobs(page, keywords, experience, maxJobs);
-//   send_connection_request_with_note: async () => { for (const url of PROFILE_URLS) await sendConnectionRequestWithNote(page, url); }
-// },
-
-// };
-      const actions = {
+    test.setTimeout(20 * 60 * 1000); // 20 minutes
+    console.log(
+      `🔍 Performing action: ${ACTION} on ${PROFILE_URLS.length} profiles...`
+    );
+    console.log("-------------------------------");
+    const actions = {
       view_feed: viewFeed,
       like_feed: likeFeed,
-      check_degree: async () => { for (const url of PROFILE_URLS) await checkDegree(page, url); },
-      send_message: async () => { for (const url of PROFILE_URLS) await sendMessage(page, url); },
-      send_connection_request: async () => { for (const url of PROFILE_URLS) await sendConnectionRequest(page, url); },
-      send_connection_request_with_note: async () => { for (const url of PROFILE_URLS) await sendConnectionRequestWithNote(page, url); },
-      check_connection_accepted: async () => { for (const url of PROFILE_URLS) await checkConnectionAccepted(page, url); },
-      check_reply: async () => { for (const url of PROFILE_URLS) await checkReply(page, url); },
-      grab_replies: async () => { for (const url of PROFILE_URLS) await grabReplies(page, url); },
-      send_follow: async () => { for (const url of PROFILE_URLS) await sendFollow(page, url); },
-      send_follow_any: async () => { for (const url of PROFILE_URLS) await sendFollowAny(page, url); },
-      withdraw_request: async () => { for (const url of PROFILE_URLS) await withdrawRequest(page, url); },
+      check_degree: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await checkDegree(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('profile_view');
+        }
+      },
+      send_message: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await sendMessage(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('message_after_connect');
+        }
+      },
+      send_connection_request: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await sendConnectionRequest(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('connection_request');
+        }
+      },
+      check_connection_accepted: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await checkConnectionAccepted(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('profile_view');
+        }
+      },
+      check_reply: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await checkReply(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('general');
+        }
+      },
+      grab_replies: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await grabReplies(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('general');
+        }
+      },
+      send_follow: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await sendFollow(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('general');
+        }
+      },
+      send_follow_any: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await sendFollowAny(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('general');
+        }
+      },
+      withdraw_request: async () => {
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await withdrawRequest(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('withdraw');
+        }
+      },
       check_own_verification: navigateToOwnProfileAndCheckStatus,
       send_message_premium: async () => {
         const isPremiumUser = await checkPremiumStatus(page);
@@ -3564,9 +3026,9 @@ test.describe("LinkedIn Multi-Action Script", () => {
           console.log(
             `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
           );
-          for (const url of PROFILE_URLS) {
-            await sendMessageToProfile(page, url);
-            await humanIdle(3000, 6000); // Pause between profiles
+          for (let i = 0; i < PROFILE_URLS.length; i++) {
+            await sendMessageToProfile(page, PROFILE_URLS[i]);
+            if (i < PROFILE_URLS.length - 1) await humanDelay('message_after_connect');
           }
         } else if (!isPremiumUser) {
           console.log("⛔ Not a premium user. Skipping message sending.");
@@ -3576,34 +3038,25 @@ test.describe("LinkedIn Multi-Action Script", () => {
       },
       like_user_post: async () => {
         console.log(`👍 Liking random posts on ${PROFILE_URLS.length} user profiles...`);
-        for (const url of PROFILE_URLS) {
-          await likeRandomUserPost(page, url);
-          await humanIdle(5000, 10000); // Longer pause between profiles to avoid rate limits
+        for (let i = 0; i < PROFILE_URLS.length; i++) {
+          await likeRandomUserPost(page, PROFILE_URLS[i]);
+          if (i < PROFILE_URLS.length - 1) await humanDelay('general');
         }
       },
-      withdraw_all_follows: withdrawAllFollows, // New action
-      withdraw_all_sent_requests: withdrawAllSentRequests, // New bulk withdraw action
+      withdraw_all_follows: withdrawAllFollows,
+      withdraw_all_sent_requests: withdrawAllSentRequests,
       check_post_impressions: checkPostImpressions,
       scrape_connections: scrapeConnections,
       grab_profile_image: grabProfileImage,
-      apply_jobs: async () => {
-        const keywords = process.env.JOB_KEYWORDS.split(",").map(k => k.trim());
-        const experience = process.env.EXPERIENCE;
-        const maxJobs = parseInt(process.env.MAX_JOBS);
-        await applyToJobs(page, keywords, experience, maxJobs);
-      },
     };
-
-  const actionFunc = actions[ACTION];
-  if (actionFunc) await actionFunc(page);
-  else
-    console.log(
-      `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
-        actions
-      ).join(", ")}`
-    );
-
-  await expect(page).toHaveURL(/linkedin\.com/);
-});
-
+    const actionFunc = actions[ACTION];
+    if (actionFunc) await actionFunc(page);
+    else
+      console.log(
+        `⚠️ Unknown action: ${ACTION}. Available actions: ${Object.keys(
+          actions
+        ).join(", ")}`
+      );
+    await expect(page).toHaveURL(/linkedin\.com/);
+  });
 });
