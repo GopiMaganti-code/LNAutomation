@@ -3190,7 +3190,7 @@ async function applyToJobs(page, keywords = [], experience = "2-5", maxJobs = 10
     console.error("❌ Job application failed:", err.message);
   }
 };
-
+// Function to send connection request with a personalized note
 async function sendConnectionRequestWithNote(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
   try {
@@ -3371,6 +3371,171 @@ async function sendConnectionRequestWithNote(page, url) {
     console.log(`✅ Finished processing ${profileName} (${url})`);
   } catch (err) {
     console.error(`❌ Failed to send connection request with note to ${url}: ${err.message}`);
+  }
+};
+
+// Function to post a text update to LinkedIn feed
+async function postToFeed(page) {
+  const content = process.env.POST_CONTENT || "As a QA engineer, I've been diving deep into automated testing frameworks lately. What's your go-to tool for ensuring robust test coverage? Sharing thoughts in the comments! #QA #Testing #Automation";
+  console.log("📝 Starting to post to LinkedIn feed...");
+  try {
+    await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60000 });
+    console.log("✅ Navigated to LinkedIn feed");
+    
+    // Perform random scrolling sessions to simulate browsing
+    const scrollSessions = Math.floor(Math.random() * 3) + 2; // 2-4 sessions
+    for (let session = 1; session <= scrollSessions; session++) {
+      console.log(`🔄 Pre-post scrolling session ${session}/${scrollSessions}...`);
+      await humanScroll(page, Math.floor(Math.random() * 4) + 2);
+      const pauseTime = Math.random() * 5000 + 2000; // 2-7 seconds
+      await page.waitForTimeout(pauseTime);
+      if (Math.random() > 0.4) {
+        console.log("🖱️ Simulating mouse movement...");
+        await humanMouse(page, Math.floor(Math.random() * 3) + 1);
+      }
+    }
+    await humanIdle(1000, 3000);
+    
+    // Click on "Start post" button
+    const startPostSelector = ".share-box-feed-entry__top-bar button:has(span[class='artdeco-button__text'])";
+    const startPostButton = page.locator(startPostSelector).first();
+    await startPostButton.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 2);
+    await startPostButton.click({ delay: 100 });
+    console.log("✏️ 'Start post' button clicked");
+    
+    await humanIdle(1500, 3500);
+    
+    // Click and type in the text editor
+    const editorSelector = "div[aria-label='Text editor for creating content']";
+    const editor = page.locator(editorSelector).first();
+    await editor.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await editor.click({ delay: 100 });
+    console.log("⌨️ Text editor focused");
+    
+    await humanType(page, editor, content);
+    console.log("📝 Post content typed");
+    
+    await humanIdle(1000, 2000);
+    
+    // Click post button
+    const postButtonSelector = "button[class$='share-actions__primary-action artdeco-button artdeco-button--2 artdeco-button--primary ember-view']";
+    const postButton = page.locator(postButtonSelector).first();
+    await postButton.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await postButton.click({ delay: 100 });
+    console.log("✅ Post submitted");
+    
+    await humanIdle(3000, 6000); // Wait for post to appear
+    console.log("✅ Finished posting to feed");
+  } catch (err) {
+    console.error("❌ Failed to post to feed:", err.message);
+  }
+};
+
+// Function to post an image to LinkedIn feed
+async function postImageToFeed(page) {
+  const imagePath = process.env.IMAGE_PATH || "C:\\Users\\gopikrishna.m\\Downloads\\productImage.png";
+  const content = process.env.POST_CONTENT_IMAGE || 
+  "As a QA engineer, I've been diving deep into automated testing frameworks lately. What's your go-to tool for ensuring robust test coverage? Sharing thoughts in the comments! #QA #Testing #Automation";
+
+  console.log("📝 Starting to post to LinkedIn feed...");
+  try {
+    await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60000 });
+    console.log("✅ Navigated to LinkedIn feed");
+    
+    // Perform random scrolling sessions to simulate browsing
+    const scrollSessions = Math.floor(Math.random() * 3) + 2; // 2-4 sessions
+    for (let session = 1; session <= scrollSessions; session++) {
+      console.log(`🔄 Pre-post scrolling session ${session}/${scrollSessions}...`);
+      await humanScroll(page, Math.floor(Math.random() * 4) + 2);
+      const pauseTime = Math.random() * 5000 + 2000; // 2–7s
+      await page.waitForTimeout(pauseTime);
+      if (Math.random() > 0.4) {
+        console.log("🖱️ Simulating mouse movement...");
+        await humanMouse(page, Math.floor(Math.random() * 3) + 1);
+      }
+    }
+    await humanIdle(1000, 3000);
+    
+    // Click on "Start post" button
+    const startPostSelector = ".share-box-feed-entry__top-bar button:has(span[class='artdeco-button__text'])";
+    const startPostButton = page.locator(startPostSelector).first();
+    await startPostButton.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 2);
+    await startPostButton.click({ delay: 100 });
+    console.log("✏️ 'Start post' button clicked");
+    
+    await humanIdle(1500, 3500);
+    
+    // Type post content
+    const editorSelector = "div[aria-label='Text editor for creating content']";
+    const editor = page.locator(editorSelector).first();
+    await editor.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await editor.click({ delay: 100 });
+    console.log("⌨️ Text editor focused");
+    
+    await humanType(page, editor, content);
+    console.log("📝 Post content typed");
+
+    await humanIdle(1000, 2000);
+
+    // Check and click preview container button if visible (e.g., close/cancel overlay)
+    const previewBtnSelector = "button[class$='share-creation-state__preview-container-btn artdeco-button artdeco-button--circle artdeco-button--muted artdeco-button--1 artdeco-button--primary ember-view']";
+    const previewBtn = page.locator(previewBtnSelector).first();
+    if (await previewBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      console.log("🗑️ Preview container button visible — clicking to dismiss...");
+      await humanMouse(page, 1);
+      await previewBtn.click({ delay: 100 });
+      await humanIdle(500, 1500);
+    } else {
+      console.log("ℹ️ No preview container button found — proceeding...");
+    }
+
+    // Add image
+    const addPhotoSelector = "button[aria-label='Add media'] span[class='share-promoted-detour-button__icon-container']";
+    const addPhotoButton = page.locator(addPhotoSelector).first();
+    await addPhotoButton.waitFor({ state: "visible", timeout: 15000 });
+    console.log("🖱️ 'Add a photo' button found");
+
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      addPhotoButton.click({ delay: 100 }),
+    ]);
+    console.log("🖼️ File chooser triggered successfully");
+
+    await fileChooser.setFiles(imagePath);
+    console.log("✅ Image uploaded via Playwright (no explorer opened)");
+    await humanIdle(3000, 5000); // wait for LinkedIn to show preview
+    const nxtBtn = page.locator("button[aria-label='Next']").first();
+    await nxtBtn.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await nxtBtn.click({ delay: 100 });
+    console.log("➡️ 'Next' button clicked — preview confirmed");
+
+    await humanIdle(3000, 5000); // wait for preview
+    const imgPreviewSelector = "img[alt$='Image preview']";
+    const imgPreview = page.locator(imgPreviewSelector).first();
+    await imgPreview.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await imgPreview.scrollIntoViewIfNeeded();
+    console.log("🖼️ Image preview in view");
+    await humanIdle(3000, 5000);
+    // Click Post
+    const postButtonSelector =
+      "button[class$='share-actions__primary-action artdeco-button artdeco-button--2 artdeco-button--primary ember-view']";
+    const postButton = page.locator(postButtonSelector).first();
+    await postButton.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await postButton.click({ delay: 100 });
+    console.log("✅ Post submitted");
+
+    await humanIdle(3000, 6000);
+    console.log("🎉 Finished posting to feed");
+  } catch (err) {
+    console.error("❌ Failed to post to feed:", err.message);
   }
 }
 
@@ -3592,6 +3757,8 @@ test.describe("LinkedIn Multi-Action Script", () => {
         const maxJobs = parseInt(process.env.MAX_JOBS);
         await applyToJobs(page, keywords, experience, maxJobs);
       },
+      post_to_feed: async () => await postToFeed(page),
+      post_image_to_feed: async () => await postImageToFeed(page),
     };
 
   const actionFunc = actions[ACTION];
