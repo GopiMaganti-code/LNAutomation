@@ -436,7 +436,7 @@ async function sendMessage(page, url) {
     await messageButton.click({ delay: 100 });
     console.log("💬 Message box opened");
     await randomDelay(1000, 2000);
-    const message = `Hi ${profileName}, I'd like to connect and discuss potential opportunities. Looking forward to hearing from you!`;
+    const message = `Hi ${profileName}, I’d like to connect to discuss potential opportunities. Hope to connect soon!`;
     const messageInput = page.locator("div.msg-form__contenteditable");
     await messageInput.waitFor({ state: "visible", timeout: 10000 });
     await humanType(page, "div.msg-form__contenteditable", message);
@@ -802,7 +802,7 @@ async function grabReplies(page, url) {
       console.log("🗑️ Closed via alt close");
     }
 
-    // Dynamic profile name extraction (fallbacks for varying structures)
+    // Dynamic profile name extraction (fallbacks for varying structures) - Kept for logging/other uses
     let profileName = "Unknown";
     const nameLocators = [
       "h1", // Primary: Profile header
@@ -868,6 +868,8 @@ async function grabReplies(page, url) {
         let currentDateHeading = "Unknown Date"; // Default; update dynamically
         let headingIndex = 0;
         let lastTimestamp = null; // Track last known timestamp for carry-forward
+        let lastSender = null; // NEW: Track last known sender for grouped/consecutive messages
+        let ownName = null; // NEW: Dynamic own name, set from first successful own extraction
 
         for (let i = 0; i < eventContainers.length; i++) {
           const eventContainer = eventContainers[i];
@@ -886,9 +888,32 @@ async function grabReplies(page, url) {
             }
           }
 
-          // Sender detection: Use class check for --other (from profileName) vs own ("Vamsi Reddy")
+          // UPDATED: Dynamic sender with tracking/fallback for missing meta in consecutive messages
           const isOther = await msgElement.evaluate(el => el.classList.contains('msg-s-event-listitem--other'));
-          let senderName = isOther ? profileName : "Vamsi Reddy";
+          let extractedName = await msgElement.locator('.msg-s-message-group__name').textContent({ timeout: 5000 }).catch(() => null); // Increased timeout
+          extractedName = extractedName ? extractedName.trim().replace(/\s+/g, " ") : null;
+
+          let senderName;
+          if (extractedName && extractedName.length > 0) {
+            senderName = extractedName;
+            lastSender = senderName; // Update tracker
+            if (!isOther && !ownName) {
+              ownName = senderName; // Set ownName from first successful own extraction
+            }
+          } else {
+            // Fallback: Use lastSender, or initial based on isOther/ownName
+            if (lastSender) {
+              senderName = lastSender;
+            } else if (isOther) {
+              senderName = profileName;
+              lastSender = senderName; // Set initial for other
+            } else if (ownName) {
+              senderName = ownName;
+              lastSender = senderName; // Set/carry for own
+            } else {
+              senderName = "Unknown Sender"; // Rare: True first message with no extraction
+            }
+          }
 
           // Timestamp: From .msg-s-message-group__timestamp (own may lack, fallback)
           let timestamp = await msgElement.locator('.msg-s-message-group__timestamp').textContent({ timeout: 3000 }).catch(() => "Unknown Time");
@@ -903,8 +928,12 @@ async function grabReplies(page, url) {
           }
 
           // Message body: Use .msg-s-event-listitem__body with textContent (matches working logic)
+          // ENHANCED: Better cleaning for links/attachments (truncate long URLs, remove empty artifacts)
           let messageText = await msgElement.locator('.msg-s-event-listitem__body').textContent({ timeout: 5000 }).catch(() => "");
-          messageText = messageText.replace(/<!---->/g, "").trim();
+          messageText = messageText
+            .replace(/<!---->/g, "") // Remove Vue artifacts
+            .replace(/https?:\/\/[^\s]+/g, (url) => url.length > 50 ? `${url.substring(0, 47)}...` : url) // Truncate long URLs
+            .trim();
           if (!messageText || messageText.length === 0) {
             messageText = "No readable content";
           }
@@ -3539,6 +3568,66 @@ async function postImageToFeed(page) {
   }
 }
 
+/* ---------------------------
+   Function to comment on a random post in the feed
+--------------------------- */
+async function commentFeed(page) {
+  const commentText = process.env.POST_COMMENT || "Great insights! What's your take on this? #LinkedIn #Engagement";
+  console.log("💬 Starting to comment on a random post...");
+  try {
+    await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 60000 });
+    await humanScroll(page, 5);
+    await humanIdle(2000, 4000);
+    const commentButtons = await page.locator("button[aria-label='Comment']").all();
+    if (commentButtons.length === 0) {
+      console.log("⚠️ No Comment buttons found on the feed");
+      return;
+    }
+    const randomIndex = Math.floor(Math.random() * commentButtons.length);
+    const selectedButton = commentButtons[randomIndex];
+    console.log(`🎯 Selected random post ${randomIndex + 1} of ${commentButtons.length} for commenting`);
+    await humanMouse(page, 2);
+    await selectedButton.scrollIntoViewIfNeeded();
+    await selectedButton.click({ delay: 100 });
+    console.log("💭 Comment button clicked");
+
+    await humanIdle(1500, 3000);
+
+    // Focus and type in the comment editor (target the div, not the inner p to avoid scroll issues)
+    const editorSelector = "div[aria-label='Text editor for creating content']";
+    const editor = page.locator(editorSelector).first();
+    await editor.waitFor({ state: "visible", timeout: 10000 });
+    await humanMouse(page, 1);
+    await editor.click({ delay: 100 });
+    console.log("⌨️ Comment editor focused");
+    await humanType(page, editorSelector, commentText);
+    console.log("📝 Comment typed");
+
+    await humanIdle(1000, 2000);
+
+    // Scroll to ensure post button is visible
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await humanIdle(500, 1000);
+
+    // Click post button (more precise selector with :has for inner text span)
+    const postButtonSelector = "button.artdeco-button.artdeco-button--1.artdeco-button--primary:has(span.artdeco-button__text)";
+    const postButton = page.locator(postButtonSelector).first();
+    await postButton.waitFor({ state: "visible", timeout: 15000 });
+    await postButton.scrollIntoViewIfNeeded();
+    await humanMouse(page, 1);
+    await postButton.click({ delay: 100 });
+    console.log("✅ Comment posted");
+
+    await randomDelay(1000, 2000);
+    console.log("✅ Finished commenting on the post");
+    await humanIdle(3000, 6000);
+  } catch (err) {
+    console.error("❌ Failed to comment on post:", err.message);
+  }
+}
+
+
+
 
 /* ---------------------------
    Main Test - Perform Action
@@ -3639,76 +3728,6 @@ test.describe("LinkedIn Multi-Action Script", () => {
   );
   console.log("-------------------------------");
 
-
-//   const actions = {
-//   view_feed: viewFeed,
-//   like_feed: likeFeed,
-//   check_degree: async () => {
-//     for (const url of PROFILE_URLS) await checkDegree(page, url);
-//   },
-//   send_message: async () => {
-//     for (const url of PROFILE_URLS) await sendMessage(page, url);
-//   },
-//   send_connection_request: async () => {
-//     for (const url of PROFILE_URLS) await sendConnectionRequest(page, url);
-//   },
-//   check_connection_accepted: async () => {
-//     for (const url of PROFILE_URLS)
-//       await checkConnectionAccepted(page, url);
-//   },
-//   check_reply: async () => {
-//     for (const url of PROFILE_URLS) await checkReply(page, url);
-//   },
-//   grab_replies: async () => {
-//     for (const url of PROFILE_URLS) await grabReplies(page, url);
-//   },
-//   send_follow: async () => {
-//     for (const url of PROFILE_URLS) await sendFollow(page, url);
-//   },
-//   send_follow_any: async () => {
-//     for (const url of PROFILE_URLS) await sendFollowAny(page, url);
-//   },
-//   withdraw_request: async () => {
-//     for (const url of PROFILE_URLS) await withdrawRequest(page, url);
-//   },
-//   check_own_verification: navigateToOwnProfileAndCheckStatus,
-//   send_message_premium: async () => {
-//     const isPremiumUser = await checkPremiumStatus(page);
-//     if (isPremiumUser && PROFILE_URLS.length > 0) {
-//       console.log(
-//         `💬 Premium user detected. Sending messages to ${PROFILE_URLS.length} profiles...`
-//       );
-//       for (const url of PROFILE_URLS) {
-//         await sendMessageToProfile(page, url);
-//         await humanIdle(3000, 6000); // Pause between profiles
-//       }
-//     } else if (!isPremiumUser) {
-//       console.log("⛔ Not a premium user. Skipping message sending.");
-//     } else {
-//       console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
-//     }
-//   },
-//   like_user_post: async () => {
-//     console.log(`👍 Liking random posts on ${PROFILE_URLS.length} user profiles...`);
-//     for (const url of PROFILE_URLS) {
-//       await likeRandomUserPost(page, url);
-//       await humanIdle(5000, 10000); // Longer pause between profiles to avoid rate limits
-//     }
-//   },
-//   withdraw_all_follows: withdrawAllFollows, // New action
-//   withdraw_all_sent_requests: withdrawAllSentRequests, // New bulk withdraw action
-//   check_post_impressions: checkPostImpressions,
-//   scrape_connections: scrapeConnections,
-//   grab_profile_image: grabProfileImage,
-//   apply_jobs: async () => {
-//   const keywords = process.env.JOB_KEYWORDS.split(",").map(k => k.trim());
-//   const experience = process.env.EXPERIENCE;
-//   const maxJobs = parseInt(process.env.MAX_JOBS);
-//   await applyToJobs(page, keywords, experience, maxJobs);
-//   send_connection_request_with_note: async () => { for (const url of PROFILE_URLS) await sendConnectionRequestWithNote(page, url); }
-// },
-
-// };
       const actions = {
       view_feed: viewFeed,
       like_feed: likeFeed,
@@ -3759,6 +3778,7 @@ test.describe("LinkedIn Multi-Action Script", () => {
       },
       post_to_feed: async () => await postToFeed(page),
       post_image_to_feed: async () => await postImageToFeed(page),
+      comment_feed: commentFeed,
     };
 
   const actionFunc = actions[ACTION];

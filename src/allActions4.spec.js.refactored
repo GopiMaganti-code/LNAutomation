@@ -1,0 +1,183 @@
+/**
+ * Refactored LinkedIn Multi-Action Test Suite
+ * This file demonstrates the refactored structure using:
+ * - Extracted selectors from selectors/selectors.js
+ * - Helper functions from helpers/
+ * - Action modules from actions/
+ * - Page objects from pages/
+ * - Fixtures from fixtures/
+ */
+
+require("dotenv").config();
+const { test } = require("./fixtures/authenticated-fixture");
+const { expect } = require("@playwright/test");
+
+// Import actions
+const { viewFeed, likeFeed } = require("./actions/feed-actions");
+const { sendMessage } = require("./actions/message-actions");
+
+// Import helpers
+const { getProfileName, getConnectionDegree } = require("./helpers/profile-helpers");
+const { closeAllMessageBoxes } = require("./helpers/ui-helpers");
+const { humanIdle, randomDelay } = require("./helpers/human-interactions");
+const { TestError } = require("./helpers/error");
+
+// Configuration
+const PROFILE_URLS = (process.env.PROFILE_URLS || "")
+  .split(",")
+  .map((url) => url.replace(/"/g, "").trim())
+  .filter((url) => url);
+const ACTION = process.env.ACTION || "view_feed";
+
+// Import remaining action functions (to be refactored into action modules)
+// These will be moved to actions/ directory in future iterations
+const {
+  checkDegree,
+  checkConnectionAccepted,
+  checkReply,
+  grabReplies,
+  sendFollow,
+  sendFollowAny,
+  withdrawRequest,
+  checkPremiumStatus,
+  sendMessageToProfile,
+  navigateToOwnProfileAndCheckStatus,
+  likeRandomUserPost,
+  withdrawAllFollows,
+  withdrawAllSentRequests,
+  checkPostImpressions,
+  scrapeConnections,
+  grabProfileImage,
+  applyToJobs,
+  sendConnectionRequest,
+  sendConnectionRequestWithNote,
+  postToFeed,
+  postImageToFeed,
+} = require("./actions/all-actions"); // This will be created by splitting the original file
+
+test.describe("LinkedIn Multi-Action Script", () => {
+  test.use({ authenticatedPage: true });
+
+  test("Perform Action", async ({ authenticatedPage: page }) => {
+    test.setTimeout(20 * 60 * 1000); // 20 minutes
+
+    const actions = {
+      view_feed: viewFeed,
+      like_feed: likeFeed,
+      check_degree: async () => {
+        for (const url of PROFILE_URLS) {
+          await checkDegree(page, url);
+          // UPDATE SELECTOR - Add assertion to verify degree was checked
+          // await expect(page.locator("UPDATE_SELECTOR")).toBeVisible();
+        }
+      },
+      send_message: async () => {
+        for (const url of PROFILE_URLS) {
+          await sendMessage(page, url);
+          // UPDATE SELECTOR - Add assertion to verify message was sent
+          // await expect(page.locator("UPDATE_SELECTOR")).toContainText("Sent");
+        }
+      },
+      send_connection_request: async () => {
+        for (const url of PROFILE_URLS) {
+          await sendConnectionRequest(page, url);
+          // UPDATE SELECTOR - Add assertion to verify connection request was sent
+          // await expect(page.locator("UPDATE_SELECTOR")).toContainText("Pending");
+        }
+      },
+      send_connection_request_with_note: async () => {
+        for (const url of PROFILE_URLS) {
+          await sendConnectionRequestWithNote(page, url);
+          // UPDATE SELECTOR - Add assertion to verify connection request with note was sent
+        }
+      },
+      check_connection_accepted: async () => {
+        for (const url of PROFILE_URLS) {
+          await checkConnectionAccepted(page, url);
+          // UPDATE SELECTOR - Add assertion to verify connection status was checked
+        }
+      },
+      check_reply: async () => {
+        for (const url of PROFILE_URLS) {
+          await checkReply(page, url);
+          // UPDATE SELECTOR - Add assertion to verify reply was checked
+        }
+      },
+      grab_replies: async () => {
+        for (const url of PROFILE_URLS) {
+          await grabReplies(page, url);
+          // UPDATE SELECTOR - Add assertion to verify replies were grabbed
+        }
+      },
+      send_follow: async () => {
+        for (const url of PROFILE_URLS) {
+          await sendFollow(page, url);
+          // UPDATE SELECTOR - Add assertion to verify follow was sent
+        }
+      },
+      send_follow_any: async () => {
+        for (const url of PROFILE_URLS) {
+          await sendFollowAny(page, url);
+          // UPDATE SELECTOR - Add assertion to verify follow was sent
+        }
+      },
+      withdraw_request: async () => {
+        for (const url of PROFILE_URLS) {
+          await withdrawRequest(page, url);
+          // UPDATE SELECTOR - Add assertion to verify request was withdrawn
+        }
+      },
+      check_own_verification: navigateToOwnProfileAndCheckStatus,
+      send_message_premium: async () => {
+        const isPremiumUser = await checkPremiumStatus(page);
+        if (isPremiumUser && PROFILE_URLS.length > 0) {
+          for (const url of PROFILE_URLS) {
+            await sendMessageToProfile(page, url);
+            await humanIdle(3000, 6000);
+            // UPDATE SELECTOR - Add assertion to verify premium message was sent
+          }
+        }
+      },
+      like_user_post: async () => {
+        for (const url of PROFILE_URLS) {
+          await likeRandomUserPost(page, url);
+          await humanIdle(5000, 10000);
+          // UPDATE SELECTOR - Add assertion to verify post was liked
+        }
+      },
+      withdraw_all_follows: withdrawAllFollows,
+      withdraw_all_sent_requests: withdrawAllSentRequests,
+      check_post_impressions: checkPostImpressions,
+      scrape_connections: scrapeConnections,
+      grab_profile_image: grabProfileImage,
+      apply_jobs: async () => {
+        const keywords = process.env.JOB_KEYWORDS.split(",").map((k) => k.trim());
+        const experience = process.env.EXPERIENCE;
+        const maxJobs = parseInt(process.env.MAX_JOBS);
+        await applyToJobs(page, keywords, experience, maxJobs);
+        // UPDATE SELECTOR - Add assertion to verify jobs were applied to
+      },
+      post_to_feed: async () => {
+        await postToFeed(page);
+        // UPDATE SELECTOR - Add assertion to verify post was created
+      },
+      post_image_to_feed: async () => {
+        await postImageToFeed(page);
+        // UPDATE SELECTOR - Add assertion to verify image post was created
+      },
+    };
+
+    const actionFunc = actions[ACTION];
+    if (actionFunc) {
+      await actionFunc(page);
+    } else {
+      throw new Error(
+        `Unknown action: ${ACTION}. Available actions: ${Object.keys(actions).join(", ")}`
+      );
+    }
+
+    // Final assertion - verify we're still on LinkedIn
+    await expect(page).toHaveURL(/linkedin\.com/);
+  });
+});
+

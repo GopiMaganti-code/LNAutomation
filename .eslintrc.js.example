@@ -1,0 +1,54 @@
+module.exports = {
+  extends: [
+    'eslint:recommended',
+    'plugin:playwright/recommended',
+  ],
+  plugins: ['playwright'],
+  parserOptions: {
+    ecmaVersion: 2022,
+    sourceType: 'module',
+  },
+  env: {
+    node: true,
+    es2022: true,
+  },
+  rules: {
+    // Playwright specific rules
+    'playwright/expect-expect': 'error',
+    'playwright/no-page-pause': 'warn',
+    'playwright/no-wait-for-timeout': 'error',
+    'playwright/missing-playwright-await': 'error',
+    'playwright/valid-expect': 'error',
+    
+    // General best practices
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    'prefer-const': 'error',
+    'no-var': 'error',
+    'prefer-arrow-callback': 'error',
+    'prefer-template': 'error',
+    
+    // Async/await best practices
+    'no-async-promise-executor': 'error',
+    'no-await-in-loop': 'warn',
+    'require-await': 'error',
+    'no-return-await': 'error',
+    
+    // Code quality
+    'max-lines-per-function': ['warn', { max: 100, skipBlankLines: true, skipComments: true }],
+    'max-lines': ['warn', { max: 500, skipBlankLines: true, skipComments: true }],
+    'complexity': ['warn', { max: 10 }],
+    'max-params': ['warn', { max: 5 }],
+    
+    // Error handling
+    'no-empty': ['error', { allowEmptyCatch: false }],
+    'no-throw-literal': 'error',
+    
+    // Code style
+    'eqeqeq': ['error', 'always'],
+    'curly': ['error', 'all'],
+    'brace-style': ['error', '1tbs'],
+  },
+};
+
+
