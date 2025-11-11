@@ -39,7 +39,7 @@ async function humanType(page, selectorOrLocator, text) {
     const delay = Math.floor(Math.random() * 150) + 50;
     await el.type(ch, { delay });
     if (Math.random() < 0.12) {
-      await randomDelay(300, 800);
+      await randomDelay(300, 1000);
     }
   }
 }
@@ -3626,6 +3626,186 @@ async function commentFeed(page) {
   }
 }
 
+// Send Folloowup Message
+async function sendFollowUpMessageToProfile(page, url) {
+  console.log(`💬 Processing profile for follow-up messaging: ${url}`);
+  await randomDelay(2000, 4000);
+  await humanScroll(page, Math.floor(Math.random() * 3) + 2);
+  await humanMouse(page, Math.floor(Math.random() * 4) + 3);
+  await randomDelay(2000, 6000);
+
+  try {
+    // Step 1️⃣ — Load profile page
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await humanIdle(2000, 4000);
+    await closeAllMessageBoxes(page);
+
+    // Additional human mimic: Scroll and hover on profile to simulate reading
+    await humanScroll(page, Math.floor(Math.random() * 3) + 2);
+    await humanMouse(page, Math.floor(Math.random() * 4) + 3);
+    await humanIdle(1500, 3000);
+
+    // Step 2️⃣ — Extract Profile Name
+    let profileName = "Friend";
+    const nameLocators = [
+      "h1",
+      'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+      "a[aria-label] h1",
+      'a[href*="/in/"] h1',
+      'div[data-view-name="profile-top-card-verified-badge"] p',
+      'div[data-view-name="profile-top-card-verified-badge"] p:first-of-type',
+    ];
+
+    for (const selector of nameLocators) {
+      try {
+        const text = await page
+          .locator(selector)
+          .textContent({ timeout: 3000 });
+        if (text && text.trim()) {
+          profileName = text.trim();
+          console.log(
+            `👤 Found profile name: "${profileName}" (via ${selector})`
+          );
+          break;
+        }
+      } catch {
+        // silent fail, try next
+      }
+    }
+
+    // Step 3️⃣ — Locate Message Button
+    const messageButtonLocators = [
+      {
+        selector: "div.ph5 button:has-text('Message')",
+        description: "old message button",
+      },
+      {
+        selector: 'a[data-view-name="profile-primary-message"]',
+        description: "primary message button",
+      },
+      {
+        selector: 'a[data-view-name="profile-secondary-message"]',
+        description: "secondary message button",
+      },
+    ];
+
+    let messageButton = null;
+    for (const { selector, description } of messageButtonLocators) {
+      try {
+        const btn = page.locator(selector).last();
+        await btn.waitFor({ state: "visible", timeout: 3000 });
+        messageButton = btn;
+        console.log(`✅ Found message button (${description})`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+
+    if (!messageButton) {
+      console.log(`⛔ No Message button found for ${profileName} (${url})`);
+      return;
+    }
+
+    // Additional human mimic: Hover near message button before clicking
+    await humanMouse(page, 2);
+    await randomDelay(500, 1500);
+
+    // Step 4️⃣ — Open message dialog
+    await messageButton.click({ delay: 100 });
+    console.log("💬 Message box opened");
+    await randomDelay(1000, 2000);
+
+    // Additional human mimic: Small idle and mouse move in dialog
+    await humanIdle(800, 2000);
+    await humanMouse(page, 1);
+
+    // Step 5️⃣ — Locate message input (and optional subject)
+    const messageInputSelector = "div.msg-form__contenteditable";
+    const messageInput = page.locator(messageInputSelector);
+    await messageInput.waitFor({ state: "visible", timeout: 10000 });
+
+    // 🔹 Check if "Subject (optional)" field exists (less likely for follow-ups in direct threads)
+    const subjectSelector = "input[placeholder='Subject (optional)']";
+    const subjectInput = page.locator(subjectSelector);
+
+    try {
+      const subjectVisible = await subjectInput.isVisible({ timeout: 2000 });
+      if (subjectVisible) {
+        console.log("✏️ Subject field detected — typing follow-up subject...");
+        await humanType(
+          page,
+          subjectSelector,
+          "Follow-up on previous message"
+        );
+        await randomDelay(500, 1000);
+        console.log("✅ Subject typed successfully");
+      } else {
+        console.log("ℹ️ No subject field found — skipping subject step");
+      }
+    } catch {
+      console.log("ℹ️ Subject field not present — continuing to message");
+    }
+
+    // Step 6️⃣ — Type follow-up message
+    const followUpMessage = `Hi ${profileName}, I hope this message finds you well. Following up on my previous message regarding potential opportunities. Are you available for a quick chat? Looking forward to your response!`;
+    await humanType(page, messageInputSelector, followUpMessage);
+    console.log("📝 Follow-up message typed");
+
+    // Additional human mimic: Idle after typing, simulate reading back
+    await humanIdle(1000, 2500);
+    await humanMouse(page, 1);
+
+    // Step 7️⃣ — Locate and click send button (includes all variants)
+    const sendButtonLocators = [
+      {
+        selector: "button.msg-form__send-button",
+        description: "standard send button",
+      },
+      {
+        selector: "button.msg-form__send-btn",
+        description: "circle send button (alt class)",
+      },
+      {
+        selector: "button[type='submit']",
+        description: "generic submit button fallback",
+      },
+      {
+        selector: "button.artdeco-button--primary",
+        description: "primary artdeco send button",
+      },
+    ];
+
+    let sendButton = null;
+    for (const { selector, description } of sendButtonLocators) {
+      try {
+        const btn = page.locator(selector).last();
+        await btn.waitFor({ state: "visible", timeout: 5000 });
+        sendButton = btn;
+        console.log(`✅ Found send button (${description})`);
+        break;
+      } catch {
+        // continue
+      }
+    }
+
+    if (!sendButton) {
+      console.log(`⛔ No Send button found for ${profileName} (${url})`);
+      return;
+    }
+
+    await humanMouse(page, 1);
+    await sendButton.click({ delay: 100 });
+    console.log(`📨 Follow-up message sent to ${profileName}`);
+
+    // Step 8️⃣ — Wrap up
+    await randomDelay(2000, 4000);
+    await closeAllMessageBoxes(page);
+    console.log(`✅ Finished sending follow-up message to ${url}`);
+  } catch (err) {
+    console.error(`❌ Failed to send follow-up message to ${url}: ${err.message}`);
+  }
+};
 
 
 
@@ -3758,6 +3938,7 @@ test.describe("LinkedIn Multi-Action Script", () => {
           console.log("⚠️ No PROFILE_URLS provided. Skipping message sending.");
         }
       },
+      
       like_user_post: async () => {
         console.log(`👍 Liking random posts on ${PROFILE_URLS.length} user profiles...`);
         for (const url of PROFILE_URLS) {
@@ -3779,6 +3960,19 @@ test.describe("LinkedIn Multi-Action Script", () => {
       post_to_feed: async () => await postToFeed(page),
       post_image_to_feed: async () => await postImageToFeed(page),
       comment_feed: commentFeed,
+      send_followup_message: async () => {
+  if (PROFILE_URLS.length > 0) {
+    console.log(
+      `💬 Sending follow-up messages to ${PROFILE_URLS.length} profiles...`
+    );
+    for (const url of PROFILE_URLS) {
+      await sendFollowUpMessageToProfile(page, url);
+      await humanIdle(3000, 6000); // Pause between profiles
+    }
+  } else {
+    console.log("⚠️ No PROFILE_URLS provided. Skipping follow-up message sending.");
+  }
+},
     };
 
   const actionFunc = actions[ACTION];
