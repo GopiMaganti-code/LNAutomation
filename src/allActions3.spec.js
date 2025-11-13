@@ -545,6 +545,11 @@ async function getVisibleLocator(page, selectors, useLast = false, timeout = 500
    Updated Function
 --------------------------- */
 async function checkConnectionAccepted(page, url) {
+  await humanIdle(2000, 4000);
+  await closeAllMessageBoxes(page);
+  await humanIdle(1000, 2000);
+  await humanScroll(page, 3);
+  await humanMouse(page, 2);
   console.log(`🌐 Visiting: ${url}`);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -1959,8 +1964,171 @@ async function getTextFromSelectors(page, selectors, timeout = 5000) {
     Send Connection Request Action
 --------------------------- */
 
+// async function sendConnectionRequest(page, url) {
+//   console.log(`🌐 Processing profile: ${url}`);
+//   await humanIdle(4000, 8000);
+//   await humanMouse(page, 1);
+//   await humanScroll(page, 3);
+//   try {
+//     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+//     await humanIdle(2000, 4000);
+//     await closeAllMessageBoxes(page);
+//     let profileName = "";
+//     const nameSelectors = [
+//       "h1",
+//       'div[data-view-name="profile-top-card-verified-badge"] div[role="button"] > div > p',
+//     ];
+//     const nameText = await getTextFromSelectors(page, nameSelectors);
+//     if (nameText) {
+//       profileName = nameText || "Friend";
+//       console.log(`👤 Profile name: ${profileName}`);
+//     } else {
+//       console.log(`⚠️ Failed to get profile name`);
+//     }
+//     const acceptSelectors = [
+//       ".ph5 [aria-label*='Accept']",
+//       'button[aria-label^="Accept"][aria-label*="request to connect"]',
+//     ];
+//     const acceptButton = await getVisibleLocator(page, acceptSelectors);
+//     if (acceptButton) {
+//       console.log(
+//         `⛔ Skipping profile ${profileName} (${url}) - Pending acceptance`
+//       );
+//       return;
+//     }
+//     const degree = await detectDegree(page);
+//     const pendingSelectors = [
+//       ".ph5 button:has-text('Pending'), .ph5 button:has-text('Withdraw')",
+//       'button[aria-label^="Pending, click to withdraw invitation"]:has(svg[id="clock-small"])',
+//     ];
+//     const pendingWithdrawButton = await getVisibleLocator(
+//       page,
+//       pendingSelectors
+//     );
+//     if (pendingWithdrawButton) {
+//       console.log("⚠️ Found Pending/Withdraw button, No Action needed");
+//       await randomDelay(1000, 2000);
+//       return;
+//     }
+//     // Check if connect action is possible (direct or via more) before skipping
+//     const connectSelectors = [
+//       ".ph5 button:has-text('Connect')",
+//       // Scoped alternatives with .last() for multi-matches
+//       'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
+//       'div[data-view-name="edge-creation-connect-action"] a',
+//       `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
+//     ];
+//     const connectButton = await getVisibleLocator(page, connectSelectors, true); // Use .last() for alternatives
+//     const moreSelectors = [
+//       ".ph5 [aria-label='More actions']",
+//       'div[data-view-name="relationship-building-button"] ~ button[data-view-name="profile-overflow-button"][aria-label="More"]',
+//       'div[data-view-name="relationship-building-button"] + a[data-view-name="profile-secondary-message"] + button[data-view-name="profile-overflow-button"]',
+//     ];
+//     const moreButton = await getVisibleLocator(page, moreSelectors);
+//     const connectOpportunity = connectButton || moreButton;
+//     if (degree === "1st") {
+//       console.log(
+//         `⛔ Skipping connection request to ${profileName} (${url}) - Already connected`
+//       );
+//       return;
+//     }
+//     if (!connectOpportunity && degree === "unknown") {
+//       console.log(
+//         `⛔ Skipping connection request to ${profileName} (${url}) - No connect opportunity`
+//       );
+//       return;
+//     }
+//     if (degree === "unknown") {
+//       console.log(`⚠️ Degree unknown, but connect available - proceeding`);
+//     }
+//     // Scoped send selectors for modal (avoids feed buttons) - Defined here for both paths
+//     const sendSelectors = [
+//       // Primary: Scoped to connect modal/dialog
+//       '[role="dialog"] button[aria-label="Send without a note"]',
+//       // Fallback: Text-based in modal
+//       'button[aria-label="Send without a note"]',
+//     ];
+//     // Proceed with connect if available
+//     if (connectButton) {
+//       await humanMouse(page, 2);
+//       await connectButton.click({ delay: 100 });
+//       console.log("💡 Connect button clicked");
+//       // Wait specifically for send button to appear and be visible
+//       try {
+//         await page.waitForSelector('button[aria-label="Send without a note"]', {
+//           state: "visible",
+//           timeout: 30000,
+//         });
+//         const sendButton = page
+//           .locator('button[aria-label="Send without a note"]')
+//           .first();
+//         await humanMouse(page, 1);
+//         await sendButton.click({ delay: 100 });
+//         console.log("✅ Connection request sent");
+//         await randomDelay(2000, 4000);
+//       } catch (e) {
+//         console.log("⚠️ Send button not found after modal load");
+//       }
+//       return;
+//     }
+//     // Fallback to More path
+//     if (moreButton) {
+//       await humanMouse(page, 2);
+//       await moreButton.click({ delay: 100 });
+//       console.log("💡 More button clicked");
+//       await randomDelay(1000, 2000);
+//       const dropdownSelectors = [
+//         ".ph5 .artdeco-dropdown__content-inner span:has-text('Connect')",
+//         // Scoped to avoid multi-matches, with .last()
+//         'a[href^="/preload/custom-invite/"]:has(svg[id="connect-small"])',
+//       ];
+//       const connectDropdown = await getVisibleLocator(
+//         page,
+//         dropdownSelectors,
+//         true
+//       ); // Use .last() for alternatives
+//       if (connectDropdown) {
+//         await humanMouse(page, 1);
+//         await connectDropdown.click({ delay: 100 });
+//         console.log("💡 Connect from dropdown clicked");
+//         // Wait specifically for send button to appear and be visible
+//         try {
+//           await page.waitForSelector(
+//             'button[aria-label="Send without a note"]',
+//             { state: "visible", timeout: 30000 }
+//           );
+//           const sendButton = page
+//             .locator('button[aria-label="Send without a note"]')
+//             .first();
+//           await humanMouse(page, 1);
+//           await sendButton.click({ delay: 100 });
+//           console.log("✅ Connection request sent");
+//           await randomDelay(2000, 4000);
+//         } catch (e) {
+//           console.log("⚠️ Send button not found after modal load");
+//         }
+//       }
+//     } else if (degree === "unknown") {
+//       console.log(
+//         `⚠️ No connect opportunity despite unknown degree - skipping`
+//       );
+//     }
+//     console.log(`✅ Finished processing ${profileName} (${url})`);
+//   } catch (err) {
+//     console.error(
+//       `❌ Failed to send connection request to ${url}: ${err.message}`
+//     );
+//   }
+// }
+
+
+
+
 async function sendConnectionRequest(page, url) {
   console.log(`🌐 Processing profile: ${url}`);
+  await humanIdle(4000, 8000);
+  await humanMouse(page, 1);
+  await humanScroll(page, 3);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     await humanIdle(2000, 4000);
@@ -2002,21 +2170,49 @@ async function sendConnectionRequest(page, url) {
       await randomDelay(1000, 2000);
       return;
     }
-    // Check if connect action is possible (direct or via more) before skipping
-    const connectSelectors = [
-      ".ph5 button:has-text('Connect')",
-      // Scoped alternatives with .last() for multi-matches
-      'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
-      'div[data-view-name="edge-creation-connect-action"] a',
-      `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
-    ];
-    const connectButton = await getVisibleLocator(page, connectSelectors, true); // Use .last() for alternatives
+    // Check for Pending in More dropdown before proceeding
     const moreSelectors = [
       ".ph5 [aria-label='More actions']",
       'div[data-view-name="relationship-building-button"] ~ button[data-view-name="profile-overflow-button"][aria-label="More"]',
       'div[data-view-name="relationship-building-button"] + a[data-view-name="profile-secondary-message"] + button[data-view-name="profile-overflow-button"]',
     ];
     const moreButton = await getVisibleLocator(page, moreSelectors);
+    let hasPendingInMore = false;
+    if (moreButton) {
+      await humanMouse(page, 1);
+      await moreButton.click({ delay: 100 });
+      console.log("🔍 Checking More dropdown for Pending...");
+      await randomDelay(1000, 2000);
+      const pendingInDropdownSelectors = [
+        '.ph5 div[aria-label^="Pending, click to withdraw invitation"]',
+        '.ph5 .artdeco-dropdown__item:has(svg[data-test-icon="clock-medium"])',
+      ];
+      const pendingInDropdown = await getVisibleLocator(
+        page,
+        pendingInDropdownSelectors
+      );
+      if (pendingInDropdown) {
+        hasPendingInMore = true;
+        console.log("⚠️ Found Pending in More dropdown, No Action needed");
+      }
+      // Close the dropdown regardless
+      await humanMouse(page, 1);
+      await moreButton.click({ delay: 100 });
+      await randomDelay(500, 1000);
+    }
+    if (hasPendingInMore) {
+      return;
+    }
+    // Check if connect action is possible (direct or via more) before skipping
+    const connectSelectors = [
+      ".ph5 button:has-text('Connect')",
+      "div[class='ph5 '] button:has-text('Connect')",
+      // Scoped alternatives with .last() for multi-matches
+      'div[data-view-name="relationship-building-button"] div[data-view-name="edge-creation-connect-action"] a',
+      'div[data-view-name="edge-creation-connect-action"] a',
+      `[data-view-name="profile-primary-message"] + div[data-view-name="relationship-building-button"] button[aria-label^="Invite"][aria-label*="to connect"]`
+    ];
+    const connectButton = await getVisibleLocator(page, connectSelectors, true); // Use .last() for alternatives
     const connectOpportunity = connectButton || moreButton;
     if (degree === "1st") {
       console.log(
@@ -2112,7 +2308,6 @@ async function sendConnectionRequest(page, url) {
     );
   }
 }
-
 /* ------------------------------------------------------
     Navigate to Own Profile and Check Verification Status
 --------------------------------------------------------- */
@@ -2205,7 +2400,7 @@ async function navigateToOwnProfileAndCheckStatus(page) {
     }
 
     // Now check verification status on own profile
-    await humanIdle(2000, 4000);
+    
     let profileName = "Unknown User";
 
     // Universal selectors for name that work for both structures
@@ -2252,6 +2447,7 @@ async function navigateToOwnProfileAndCheckStatus(page) {
           console.log(
             `✅ Found name with selector: ${selector} - ${profileName}`
           );
+          
           break;
         }
       } catch (err) {
@@ -2285,6 +2481,13 @@ async function navigateToOwnProfileAndCheckStatus(page) {
         isVerified ? "Yes" : "No"
       }`
     );
+    await humanIdle(2000, 4000);
+
+    humanIdle(4000, 6000);
+    await humanMouse(page, 4);
+    await humanScroll(page, 3);
+    await humanIdle(2000, 4000);
+    await humanScroll(page, 3);
   } catch (err) {
     console.error(
       `❌ Error navigating to own profile or checking status: ${err.message}`
