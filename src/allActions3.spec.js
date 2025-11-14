@@ -2146,6 +2146,11 @@ async function sendConnectionRequest(page, url) {
       `❌ Failed to send connection request to ${url}: ${err.message}`
     );
   }
+  await randomDelay(1000, 2000);
+  await console.log(`----------------------------`);
+  await humanIdle(2000, 4000);
+  await humanScroll(page, 2);
+  await humanIdle(2000, 4000);
 }
 
 
@@ -2895,6 +2900,10 @@ async function checkPostImpressions(page) {
   await humanIdle(2000, 4000);
 
   console.log("✅ Finished checking Post Impressions / Creator Analytics");
+  await humanIdle(3000, 6000);
+  await humanScroll(page, 3);
+  await humanIdle(2000, 4000);
+  await humanMouse(page, 4);
 }
 
 
